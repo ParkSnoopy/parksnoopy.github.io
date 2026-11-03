@@ -2,14 +2,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  Receiver, decodeFrame, encodeFrame, formatMissing, parseMissing, prepareTransfer, TYPE_DATA,
+  Receiver,
+  decodeFrame,
+  encodeFrame,
+  formatMissing,
+  parseMissing,
+  prepareTransfer,
+  TYPE_DATA,
 } from "../static/tools/qr-share/app/protocol.js";
 
 const sample = () => {
   const data = new Uint8Array(5_000);
   let x = 123456789;
   for (let i = 0; i < data.length; i++) {
-    x ^= x << 13; x ^= x >>> 17; x ^= x << 5; // xorshift32, hard to compress
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5; // xorshift32, hard to compress
     data[i] = x & 0xff;
   }
   return data;
@@ -21,7 +29,8 @@ test("frame round trip and CRC rejection", () => {
   assert.equal(f.tid, 0xabcd);
   assert.equal(f.index, 42);
   assert.deepEqual([...f.payload], [1, 2, 3]);
-  const flipped = text.slice(0, 20) + (text[20] === "A" ? "B" : "A") + text.slice(21);
+  const flipped =
+    text.slice(0, 20) + (text[20] === "A" ? "B" : "A") + text.slice(21);
   assert.equal(decodeFrame(flipped), null);
   assert.equal(decodeFrame("not a frame"), null);
 });
@@ -44,7 +53,8 @@ test("full transfer with lost frames, replay, and assembly", async () => {
   assert.equal(rx.feed(frames[0]), "duplicate");
 
   const lost = new Set([2, 3, meta.count]);
-  for (let i = 1; i <= meta.count; i++) if (!lost.has(i)) assert.equal(rx.feed(frames[i]), "data");
+  for (let i = 1; i <= meta.count; i++)
+    if (!lost.has(i)) assert.equal(rx.feed(frames[i]), "data");
   assert.equal(rx.feed(frames[2].slice(0, 30) + "!!"), "bad"); // damaged frame
   assert.equal(rx.feed(frames[0]), "pass-end");
   assert.equal(rx.ended, true);
@@ -52,7 +62,8 @@ test("full transfer with lost frames, replay, and assembly", async () => {
   assert.equal(rx.missingCode(), formatMissing(tid, [2, 3, meta.count]));
   await assert.rejects(rx.assemble(), /missing/);
 
-  for (const i of parseMissing(rx.missingCode(), tid, meta.count)) rx.feed(frames[i]);
+  for (const i of parseMissing(rx.missingCode(), tid, meta.count))
+    rx.feed(frames[i]);
   assert.equal(rx.complete(), true);
   const out = await rx.assemble();
   assert.equal(out.name, "a_b.bin");
@@ -79,7 +90,11 @@ test("data that fails the checksum is rejected", async () => {
 });
 
 test("decompression bomb is cut off at the announced size", async () => {
-  const { meta, frames } = await prepareTransfer("z", new Uint8Array(100_000), 100);
+  const { meta, frames } = await prepareTransfer(
+    "z",
+    new Uint8Array(100_000),
+    100,
+  );
   const rx = new Receiver();
   rx.feed(frames[0]);
   for (let i = 1; i <= meta.count; i++) rx.feed(frames[i]);

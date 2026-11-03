@@ -3,7 +3,8 @@
 import { Receiver, parseMissing, prepareTransfer } from "./protocol.js";
 
 const $ = (id) => document.getElementById(id);
-const clamp = (v, lo, hi, fallback) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : fallback));
+const clamp = (v, lo, hi, fallback) =>
+  Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : fallback));
 
 // ---------- tabs ----------
 
@@ -37,7 +38,8 @@ function drawQR(text) {
   g.fillStyle = "#000";
   for (let r = 0; r < n; r++) {
     for (let col = 0; col < n; col++) {
-      if (qr.isDark(r, col)) g.fillRect((col + 4) * scale, (r + 4) * scale, scale, scale);
+      if (qr.isDark(r, col))
+        g.fillRect((col + 4) * scale, (r + 4) * scale, scale, scale);
     }
   }
 }
@@ -67,7 +69,8 @@ async function prepare() {
     transfer = next;
     drawQR(transfer.frames[0]);
     updateInfo();
-    $("send-status").textContent = "Show this metadata code to the receiver. Press Start when the receiver is ready.";
+    $("send-status").textContent =
+      "Show this metadata code to the receiver. Press Start when the receiver is ready.";
     $("start").disabled = $("replay").disabled = false;
   } catch (e) {
     if (id === prepId) $("send-error").textContent = e.message;
@@ -82,12 +85,14 @@ function play(indexes) {
   const step = () => {
     if (k >= indexes.length) {
       drawQR(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
-      $("send-status").textContent = "Pass finished. If the receiver shows missing numbers, enter them below.";
+      $("send-status").textContent =
+        "Pass finished. If the receiver shows missing numbers, enter them below.";
       buttons.forEach((b) => (b.disabled = false));
       return;
     }
     drawQR(transfer.frames[indexes[k]]);
-    $("send-status").textContent = `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
+    $("send-status").textContent =
+      `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
     k++;
     timer = setTimeout(step, delay);
   };
@@ -104,7 +109,9 @@ $("start").onclick = () => {
 $("replay").onclick = () => {
   $("send-error").textContent = "";
   try {
-    play(parseMissing($("missing-in").value, transfer.tid, transfer.meta.count));
+    play(
+      parseMissing($("missing-in").value, transfer.tid, transfer.meta.count),
+    );
   } catch (e) {
     $("send-error").textContent = e.message;
   }
@@ -139,7 +146,9 @@ async function scanOnce() {
   scanCanvas.height = h;
   scanCtx.drawImage(video, 0, 0, w, h);
   const img = scanCtx.getImageData(0, 0, w, h);
-  return jsQR(img.data, w, h, { inversionAttempts: "dontInvert" })?.data ?? null;
+  return (
+    jsQR(img.data, w, h, { inversionAttempts: "dontInvert" })?.data ?? null
+  );
 }
 
 function stopCamera() {
@@ -160,17 +169,25 @@ $("cam").onclick = async () => {
   if (stream) return;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
       audio: false,
     });
     video.srcObject = stream;
     await video.play();
-    if (window.BarcodeDetector && (await BarcodeDetector.getSupportedFormats()).includes("qr_code")) {
+    if (
+      window.BarcodeDetector &&
+      (await BarcodeDetector.getSupportedFormats()).includes("qr_code")
+    ) {
       detector = new BarcodeDetector({ formats: ["qr_code"] });
     }
   } catch (e) {
     stopCamera();
-    $("rx-error").textContent = `Camera error: ${e.message}. The camera needs https or localhost.`;
+    $("rx-error").textContent =
+      `Camera error: ${e.message}. The camera needs https or localhost.`;
     return;
   }
   render();
@@ -228,9 +245,11 @@ function render() {
   if (result) status = "Done. The data passed every check.";
   else if (complete) status = "All frames received. Checking...";
   else if (m && rx.ended) status = "The pass ended with missing frames.";
-  else if (m && rx.received === 0) status = "Ready. Press Start transfer on the sender.";
+  else if (m && rx.received === 0)
+    status = "Ready. Press Start transfer on the sender.";
   else if (m) status = "Receiving...";
-  else if (stream) status = "Point the camera at the metadata QR code on the sender.";
+  else if (stream)
+    status = "Point the camera at the metadata QR code on the sender.";
   $("rx-status").textContent = status;
 
   $("rx-info").textContent = m
@@ -242,5 +261,7 @@ function render() {
   if (missing) $("missing-out").textContent = rx.missingCode();
   $("show-missing").hidden = !m || complete || missing;
   $("download").hidden = !result;
-  if (result) $("download").textContent = `Download ${result.name} (${result.bytes.length} B)`;
+  if (result)
+    $("download").textContent =
+      `Download ${result.name} (${result.bytes.length} B)`;
 }

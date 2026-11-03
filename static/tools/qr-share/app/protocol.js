@@ -70,13 +70,18 @@ export function decodeFrame(text) {
 }
 
 export async function gzip(bytes) {
-  const out = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  const out = new Blob([bytes])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
   return new Uint8Array(await new Response(out).arrayBuffer());
 }
 
 // Stops reading once the output passes `limit`, so a hostile stream cannot fill memory.
 export async function gunzip(bytes, limit) {
-  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+  const reader = new Blob([bytes])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"))
+    .getReader();
   const chunks = [];
   let total = 0;
   for (;;) {
@@ -119,9 +124,23 @@ export async function prepareTransfer(name, data, chunkSize) {
     count,
     sha256: await sha256Hex(packed),
   };
-  const frames = [encodeFrame(TYPE_META, tid, 0, new TextEncoder().encode(JSON.stringify(meta)))];
+  const frames = [
+    encodeFrame(
+      TYPE_META,
+      tid,
+      0,
+      new TextEncoder().encode(JSON.stringify(meta)),
+    ),
+  ];
   for (let i = 0; i < count; i++) {
-    frames.push(encodeFrame(TYPE_DATA, tid, i + 1, packed.subarray(i * chunkSize, (i + 1) * chunkSize)));
+    frames.push(
+      encodeFrame(
+        TYPE_DATA,
+        tid,
+        i + 1,
+        packed.subarray(i * chunkSize, (i + 1) * chunkSize),
+      ),
+    );
   }
   return { tid, meta, frames };
 }
@@ -141,14 +160,16 @@ export function formatMissing(tid, indexes) {
 
 export function parseMissing(code, tid, count) {
   const [id, list = ""] = code.replace(/\s+/g, "").split(":");
-  if (id.toUpperCase() !== hex4(tid)) throw new Error("This code belongs to another transfer.");
+  if (id.toUpperCase() !== hex4(tid))
+    throw new Error("This code belongs to another transfer.");
   const out = new Set();
   for (const token of list.split(",").filter(Boolean)) {
     const m = /^(\d+)(?:-(\d+))?$/.exec(token);
     if (!m) throw new Error(`Cannot read "${token}".`);
     const lo = Number(m[1]);
     const hi = Number(m[2] ?? m[1]);
-    if (lo < 1 || hi < lo || hi > count) throw new Error(`Range "${token}" is outside 1-${count}.`);
+    if (lo < 1 || hi < lo || hi > count)
+      throw new Error(`Range "${token}" is outside 1-${count}.`);
     for (let i = lo; i <= hi; i++) out.add(i);
   }
   if (out.size === 0) throw new Error("The code lists no frames.");
@@ -159,13 +180,15 @@ function validMeta(m) {
   const int = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
   return (
     m &&
-    typeof m.name === "string" && m.name.length <= 255 &&
+    typeof m.name === "string" &&
+    m.name.length <= 255 &&
     int(m.size, 0, 2 ** 32) &&
     int(m.packed, 0, 2 ** 32) &&
     int(m.chunk, 1, 1 << 20) &&
     int(m.count, 1, MAX_FRAMES) &&
     m.count === Math.max(1, Math.ceil(m.packed / m.chunk)) &&
-    typeof m.sha256 === "string" && /^[0-9a-f]{64}$/.test(m.sha256)
+    typeof m.sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(m.sha256)
   );
 }
 
@@ -242,12 +265,17 @@ export class Receiver {
   async assemble() {
     if (!this.complete()) throw new Error("Frames are still missing.");
     const { name, size, packed, sha256 } = this.meta;
-    const chunks = [...this.parts.keys()].sort((a, b) => a - b).map((i) => this.parts.get(i));
-    if (chunks.reduce((n, c) => n + c.length, 0) !== packed) throw new Error("Data length does not match the metadata.");
+    const chunks = [...this.parts.keys()]
+      .sort((a, b) => a - b)
+      .map((i) => this.parts.get(i));
+    if (chunks.reduce((n, c) => n + c.length, 0) !== packed)
+      throw new Error("Data length does not match the metadata.");
     const joined = concat(chunks, packed);
-    if ((await sha256Hex(joined)) !== sha256) throw new Error("Checksum mismatch. Reset and send again.");
+    if ((await sha256Hex(joined)) !== sha256)
+      throw new Error("Checksum mismatch. Reset and send again.");
     const bytes = await gunzip(joined, size);
-    if (bytes.length !== size) throw new Error("Decompressed size does not match the metadata.");
+    if (bytes.length !== size)
+      throw new Error("Decompressed size does not match the metadata.");
     return { name: name.replace(/[\\/]/g, "_") || "received.bin", bytes };
   }
 }
