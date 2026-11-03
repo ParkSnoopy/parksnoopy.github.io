@@ -17,7 +17,7 @@ The page makes no network requests after it has loaded, so you can turn the netw
 2. On the sender, choose a file. The first QR code holds the file name, sizes, frame count, and a SHA-256 checksum.
 3. On the receiver, press Start camera and point it at that code. The receiver shows the file and says it is ready.
 4. On the sender, press Start transfer. The data frames play at the chosen speed. Keep the camera on the code.
-5. If frames are missing or damaged, the receiver shows a short code such as `3F2A:3-5,9`. Type it into the sender and press Replay missing frames.
+5. If frames are missing or damaged, the receiver shows the missing frame numbers, joined by `/`, such as `3/4/5/9`. Type them into the sender and press Replay missing frames.
 6. When every frame has arrived, the receiver checks the checksum, decompresses the data, and offers the download.
 
 ## Notes

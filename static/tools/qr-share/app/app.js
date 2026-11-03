@@ -106,12 +106,13 @@ $("start").onclick = () => {
   $("send-error").textContent = "";
   play(Array.from({ length: transfer.meta.count }, (_, i) => i + 1));
 };
+$("missing-in").oninput = (e) => {
+  e.target.value = e.target.value.replace(/[^0-9/]/g, "");
+};
 $("replay").onclick = () => {
   $("send-error").textContent = "";
   try {
-    play(
-      parseMissing($("missing-in").value, transfer.tid, transfer.meta.count),
-    );
+    play(parseMissing($("missing-in").value, transfer.meta.count));
   } catch (e) {
     $("send-error").textContent = e.message;
   }

@@ -36,16 +36,17 @@ test("frame round trip and CRC rejection", () => {
 });
 
 test("missing code format and parse", () => {
-  assert.equal(formatMissing(0x3f2a, [9, 3, 4, 5, 12, 13]), "3F2A:3-5,9,12-13");
-  assert.deepEqual(parseMissing("3f2a: 3-5, 9", 0x3f2a, 20), [3, 4, 5, 9]);
-  assert.throws(() => parseMissing("0000:3", 0x3f2a, 20), /another transfer/);
-  assert.throws(() => parseMissing("3F2A:21", 0x3f2a, 20), /outside/);
-  assert.throws(() => parseMissing("3F2A:x", 0x3f2a, 20), /Cannot read/);
+  assert.equal(formatMissing([9, 3, 4, 12]), "3/4/9/12");
+  assert.deepEqual(parseMissing(" 9/3 /4//3/", 20), [3, 4, 9]);
+  assert.throws(() => parseMissing("21", 20), /outside/);
+  assert.throws(() => parseMissing("0", 20), /outside/);
+  assert.throws(() => parseMissing("3-5", 20), /Cannot read/);
+  assert.throws(() => parseMissing("", 20), /at least one/);
 });
 
 test("full transfer with lost frames, replay, and assembly", async () => {
   const data = sample();
-  const { tid, meta, frames } = await prepareTransfer("a/b.bin", data, 100);
+  const { meta, frames } = await prepareTransfer("a/b.bin", data, 100);
   assert.ok(meta.count > 5);
   const rx = new Receiver();
 
@@ -59,10 +60,10 @@ test("full transfer with lost frames, replay, and assembly", async () => {
   assert.equal(rx.feed(frames[0]), "pass-end");
   assert.equal(rx.ended, true);
   assert.equal(rx.complete(), false);
-  assert.equal(rx.missingCode(), formatMissing(tid, [2, 3, meta.count]));
+  assert.equal(rx.missingCode(), formatMissing([2, 3, meta.count]));
   await assert.rejects(rx.assemble(), /missing/);
 
-  for (const i of parseMissing(rx.missingCode(), tid, meta.count))
+  for (const i of parseMissing(rx.missingCode(), meta.count))
     rx.feed(frames[i]);
   assert.equal(rx.complete(), true);
   const out = await rx.assemble();

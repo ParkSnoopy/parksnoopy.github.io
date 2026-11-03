@@ -145,34 +145,21 @@ export async function prepareTransfer(name, data, chunkSize) {
   return { tid, meta, frames };
 }
 
-const hex4 = (tid) => tid.toString(16).padStart(4, "0").toUpperCase();
-
-// Missing indexes become a short code a person can read aloud: "3F2A:3-5,9".
-export function formatMissing(tid, indexes) {
-  const ranges = [];
-  for (const i of [...indexes].sort((a, b) => a - b)) {
-    const last = ranges[ranges.length - 1];
-    if (last && i === last[1] + 1) last[1] = i;
-    else ranges.push([i, i]);
-  }
-  return `${hex4(tid)}:${ranges.map(([a, b]) => (a === b ? a : `${a}-${b}`)).join(",")}`;
+// Missing indexes become digits joined by "/", easy to read aloud and type: "3/4/5/9".
+export function formatMissing(indexes) {
+  return [...indexes].sort((a, b) => a - b).join("/");
 }
 
-export function parseMissing(code, tid, count) {
-  const [id, list = ""] = code.replace(/\s+/g, "").split(":");
-  if (id.toUpperCase() !== hex4(tid))
-    throw new Error("This code belongs to another transfer.");
+export function parseMissing(code, count) {
   const out = new Set();
-  for (const token of list.split(",").filter(Boolean)) {
-    const m = /^(\d+)(?:-(\d+))?$/.exec(token);
-    if (!m) throw new Error(`Cannot read "${token}".`);
-    const lo = Number(m[1]);
-    const hi = Number(m[2] ?? m[1]);
-    if (lo < 1 || hi < lo || hi > count)
-      throw new Error(`Range "${token}" is outside 1-${count}.`);
-    for (let i = lo; i <= hi; i++) out.add(i);
+  for (const token of code.replace(/\s+/g, "").split("/").filter(Boolean)) {
+    if (!/^\d+$/.test(token)) throw new Error(`Cannot read "${token}".`);
+    const n = Number(token);
+    if (n < 1 || n > count)
+      throw new Error(`Number ${token} is outside 1-${count}.`);
+    out.add(n);
   }
-  if (out.size === 0) throw new Error("The code lists no frames.");
+  if (out.size === 0) throw new Error("Enter at least one number.");
   return [...out].sort((a, b) => a - b);
 }
 
@@ -224,7 +211,7 @@ export class Receiver {
   }
 
   missingCode() {
-    return formatMissing(this.tid, this.missing());
+    return formatMissing(this.missing());
   }
 
   // Returns one of: "meta", "data", "pass-end", "duplicate", "foreign", "bad".
