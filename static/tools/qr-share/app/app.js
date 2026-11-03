@@ -168,6 +168,11 @@ async function loop() {
 $("cam").onclick = async () => {
   $("rx-error").textContent = "";
   if (stream) return;
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    $("rx-error").textContent =
+      `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
+    return;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -179,21 +184,39 @@ $("cam").onclick = async () => {
     });
     video.srcObject = stream;
     await video.play();
+  } catch (e) {
+    stopCamera();
+    $("rx-error").textContent = cameraError(e);
+    return;
+  }
+  try {
     if (
       window.BarcodeDetector &&
       (await BarcodeDetector.getSupportedFormats()).includes("qr_code")
     ) {
       detector = new BarcodeDetector({ formats: ["qr_code"] });
     }
-  } catch (e) {
-    stopCamera();
-    $("rx-error").textContent =
-      `Camera error: ${e.message}. The camera needs https or localhost.`;
-    return;
+  } catch {
+    detector = null; // jsQR is the fallback
   }
   render();
   loop();
 };
+
+function cameraError(e) {
+  switch (e.name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Camera permission is denied. Allow the camera for this site in the browser or system settings, then press Start camera again.";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No camera was found on this device.";
+    case "NotReadableError":
+      return "The camera is in use by another app. Close that app and try again.";
+    default:
+      return `Camera error: ${e.name}: ${e.message}`;
+  }
+}
 
 $("reset").onclick = () => {
   rx.reset();
