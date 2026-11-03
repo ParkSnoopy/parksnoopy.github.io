@@ -5,17 +5,17 @@ description: "What agent-assisted reverse engineering changes, and how Rust obfu
 tags: ["reverse-engineering", "rust", "security", "obfuscation"]
 ---
 
-An executable does not need to expose its source code for someone to change its behavior. A binary patch to Sublime Text's directory scanner shows how much an analyst can learn from a program they can inspect and run. Agent-assisted tools such as REA make that workflow easier to coordinate. The defense is not to promise an unreadable binary, but to make useful analysis more expensive without pretending the client is a trusted machine.
+An executable does not need to expose its source code for someone to change its behavior. My binary patch to Sublime Text's directory scanner shows how much an analyst can learn from a program they can inspect and run. Agent-assisted tools such as REA make that workflow easier to coordinate. I want to make useful analysis more expensive without promising an unreadable binary or pretending the client is a trusted machine.
 
 <!--more-->
 
 ## A patch without source code
 
-The [Sublime Text patch][sublime] documents a concrete case. Sublime Text 4 Build 4215 on Linux x86-64 recursively scanned a workspace with large repositories. The documented patch redirected two catalogue recursion calls and one sidebar branch to added code. The new code checked for `.git`, allowed recursive scans for an expanded Git project, and kept other folders shallow. It also changed an ELF program header to map executable hook code.
+My [Sublime Text patch article][sublime] documents a concrete case. Sublime Text 4 Build 4215 on Linux x86-64 recursively scanned a workspace with large repositories. The patch redirected two catalogue recursion calls and one sidebar branch to added code. The new code checked for `.git`, allowed recursive scans for an expanded Git project, and kept other folders shallow. It also changed an ELF program header to map executable hook code.
 
-The Gist reports that, in one workspace with ten LLVM checkouts, RSS after eight seconds fell from more than 305 MB and rising to 139 MB. It also reports `openat` traces for the intended expansion behavior. These are the Gist's measurements for that setup, not independent verification here. The patch targets one particular binary build and its offsets; it is not a general Sublime Text fix. Nor does the Gist establish that REA was used or that the binary had no protections.
+In a workspace with ten LLVM checkouts, RSS after eight seconds fell from more than 305 MB and rising to 139 MB. The article also includes `openat` traces of the resulting expansion behavior. The patch targets one particular binary build and its offsets.
 
-The lesson is narrower and more useful: even without the original source, observing behavior, tracing calls, and changing a few branches can be enough to alter a program. This example is a performance repair, not a license bypass. The same client-side control matters when the behavior being changed is a proprietary algorithm or a local authorization decision.
+Even without the original source, observing behavior, tracing calls, and changing a few branches can be enough to alter a program. The same client-side control matters when the behavior being changed is a proprietary algorithm or a local authorization decision.
 
 ## What REA changes
 
@@ -23,11 +23,9 @@ The lesson is narrower and more useful: even without the original source, observ
 
 Assume an analyst has a copy of the release, can run it with chosen inputs, and can examine or modify files and process memory. They may compare outputs, follow interesting strings and cross-references, inspect the loader, or patch a conditional branch. An agent can automate parts of that iteration. Obfuscation targets the cost of understanding those artifacts; it cannot prevent someone who controls the machine from observing the program's behavior.
 
-There are legitimate reasons to reverse engineer, including interoperability, security research, and repair. The goal here is to protect code and assets that a publisher has a reason to protect, not to equate all analysis with an attack. Follow the applicable law and license terms when inspecting or modifying software.
-
 ## Build-time defense: Arkari for Rust
 
-[rust_llvm-arkari_ollvm][arkari] combines Rust's LLVM fork with Arkari's obfuscation passes. A Rust compiler built against that backend can transform code during compilation, before it becomes a native executable. The project documents Linux and Windows 64-bit release targets. It also documents pass-specific incompatibilities, including failures involving control-flow flattening and some dependencies.
+My [rust_llvm-arkari_ollvm][arkari] project combines Rust's LLVM fork with Arkari's obfuscation passes. A Rust compiler built against that backend can transform code during compilation, before it becomes a native executable. I provide Linux and Windows 64-bit release targets. Some passes have compatibility issues, including failures involving control-flow flattening and some dependencies.
 
 The passes address different clues:
 
@@ -38,13 +36,13 @@ The passes address different clues:
 | String and constant encryption | Transforms supported strings and integer or floating-point constants. | Plaintext or computed values may be visible when used; not every string is necessarily transformed. |
 | Rust string fingerprint replacement | Optionally replaces selected namespace and source-path text in eligible byte-array constants. | It is not symbol renaming, does not cover every constant, and may affect application-visible data. |
 
-These are transformations, not encryption of the entire running program. The compiler project notes that precompiled libraries are not rewritten by these passes. Rebuilding the standard library with the matching compiler and flags is a separate requirement for applying them to that code. A pass that helps one project may break another, so test the actual release and dependencies rather than assuming that more passes are always better.
+These are transformations, not encryption of the entire running program. The passes do not rewrite precompiled libraries. Rebuilding the standard library with the matching compiler and flags is a separate requirement for applying them to that code. A pass that helps one project may break another, so test the actual release and dependencies rather than assuming that more passes are always better.
 
 ## Release pipeline: cargo-rrea
 
-[cargo-rrea][rrea] packages these ideas as a Cargo subcommand. Its documented release pipeline selects an Arkari compiler, applies its enabled passes, strips metadata, renames eligible library files and ELF Rust dynamic symbols, and packs the runtime bundle using a modified UPX fork. Its default policy enables the implemented features; each is a separate source of friction, not an independent guarantee of protection.[^policy]
+I built [cargo-rrea][rrea] to package these ideas as a Cargo subcommand. Its release pipeline selects an Arkari compiler, applies its enabled passes, strips metadata, renames eligible library files and ELF Rust dynamic symbols, and packs the runtime bundle using a modified UPX fork. Its default policy enables the implemented features; each is a separate source of friction, not an independent guarantee of protection.[^policy]
 
-For a trusted Rust project, the documented entry point is:
+For a trusted Rust project, use:
 
 ```sh
 cargo install cargo-rrea --locked
@@ -61,13 +59,13 @@ The layers have practical consequences:
 - **Name changes** make some library and symbol identities less obvious. On ELF, the symbol policy assumes a closed bundle; use `--keep-symbol NAME` for externally consumed or dynamically looked-up Rust names. Native interfaces must continue to work.
 - **Packing** makes the on-disk payload less directly readable. The default opaque mode is reversible scrambling, not encryption. The matching modified packer can recover the original payload, and loader structure can still identify a packed binary. Packing can also increase size.
 - **Runtime guard** in the Linux packer can terminate a program when an analysis-tool process name is visible, even if that tool is unrelated. This can affect legitimate users and debugging.
-- **Compatibility and licensing** require review before distribution. The pipeline uses `panic = "unwind"`, changes linkage and release settings, and may expose pass-specific bugs. The project documents GPL-compatibility restrictions for its modified UPX and stubs; check the actual license and your distribution obligations.[^policy]
+- **Compatibility and licensing** require review before distribution. The pipeline uses `panic = "unwind"`, changes linkage and release settings, and may expose pass-specific bugs. My modified UPX and stubs have GPL-compatibility restrictions; check the actual license and your distribution obligations.[^policy]
 
 If a layer breaks a project, the CLI offers targeted opt-outs such as `--no-fla` and `--no-upx`. Disabling a layer changes the resulting protection. Test the complete bundle on each supported platform, including external symbol lookup, errors, and the actual deployment environment.
 
 ## What the measurements show
 
-The project's [native evaluation][evaluation] tested one Linux x86-64 Base116 command-line application with a baseline, stripped and packed baselines, and protected bundle variants. The snapshot predates default ELF symbol renaming. It checked 52 binary/wrapper cases and 20 malformed-input cases per variant, not every possible application behavior.
+My [native evaluation][evaluation] tested one Linux x86-64 Base116 command-line application with a baseline, stripped and packed baselines, and protected bundle variants. The snapshot predates default ELF symbol renaming. It checked 52 binary/wrapper cases and 20 malformed-input cases per variant, not every possible application behavior.
 
 On that workload, the baseline encoder had a 21.73 ms median and the protected, filename-mangled bundle had a 1,083.80 ms median. The corresponding decoder medians were 28.05 ms and 2,232.48 ms. The baseline was one 1,153,088-byte file; the protected bundle was 19 files totaling 5,968,316 bytes. These are measurements for one application and host, not general overhead estimates. The baseline used ordinary Rust linkage while the protected bundle used different linkage, so the difference cannot be attributed to LLVM passes alone.
 
@@ -79,7 +77,7 @@ Do not embed a secret in a client and assume an obfuscator can keep it secret. P
 
 For code that must run locally, define the specific behavior or asset worth protecting. Build an ordinary release and a protected release from the same revision. Verify equivalent behavior, distribution contents, startup, memory, and representative workloads. Then give independent analysts the same task, tools, time budget, and prior information for both builds. Record correctness and time, not just whether a decompiler imports a file. Recheck after toolchain or dependency changes.
 
-Arkari and cargo-rrea can add obstacles to static analysis. Their own evaluation also shows recoverable artifacts and potentially substantial costs. Use them as one layer in a threat model, not as a substitute for one.
+My Arkari-based toolchain and cargo-rrea can add obstacles to static analysis. My evaluation also shows recoverable artifacts and potentially substantial costs. Use them as one layer in a threat model, not as a substitute for one.
 
 [^policy]: The [cargo-rrea architecture and feature contract][architecture] describes the switches, output layout, runtime behavior, and compatibility boundaries. Tool behavior can change between releases; check the documentation for the version you deploy.
 
