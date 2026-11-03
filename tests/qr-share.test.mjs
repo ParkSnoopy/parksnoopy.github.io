@@ -55,7 +55,7 @@ test("full transfer with lost frames, replay, and assembly", async () => {
   const lost = new Set([2, 3, meta.count]);
   for (let i = 1; i <= meta.count; i++)
     if (!lost.has(i)) assert.equal(rx.feed(frames[i]), "data");
-  assert.equal(rx.feed(frames[2].slice(0, 30) + "!!"), "bad"); // damaged frame
+  assert.equal(rx.feed(`${frames[2].slice(0, 30)}!!`), "bad"); // damaged frame
   assert.equal(rx.feed(frames[0]), "pass-end");
   assert.equal(rx.ended, true);
   assert.equal(rx.complete(), false);

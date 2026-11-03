@@ -80,14 +80,14 @@ async function prepare() {
 function play(indexes) {
   const delay = 1000 / fps();
   const buttons = [$("start"), $("replay")];
-  buttons.forEach((b) => (b.disabled = true));
+  for (const b of buttons) b.disabled = true;
   let k = 0;
   const step = () => {
     if (k >= indexes.length) {
       drawQR(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
       $("send-status").textContent =
         "Pass finished. If the receiver shows missing numbers, enter them below.";
-      buttons.forEach((b) => (b.disabled = false));
+      for (const b of buttons) b.disabled = false;
       return;
     }
     drawQR(transfer.frames[indexes[k]]);
@@ -152,7 +152,7 @@ async function scanOnce() {
 }
 
 function stopCamera() {
-  stream?.getTracks().forEach((t) => t.stop());
+  for (const t of stream?.getTracks() ?? []) t.stop();
   stream = null;
 }
 
