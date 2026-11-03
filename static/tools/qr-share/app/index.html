@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QR file share</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <p><a href="../">&lt; back to the tool page</a></p>
+  <h1>QR file share</h1>
+  <p class="dim">Everything runs in this page. Nothing is uploaded, and nothing leaves your device after the page has loaded.</p>
+
+  <nav>
+    <button id="tab-send" class="tab active" type="button">Send</button>
+    <button id="tab-receive" class="tab" type="button">Receive</button>
+  </nav>
+
+  <section id="send">
+    <label>File <input id="file" type="file"></label>
+    <div class="row">
+      <label>Bytes per frame <input id="chunk" type="number" min="100" max="1500" value="500"></label>
+      <label>Frames per second <input id="fps" type="number" min="1" max="15" value="4"></label>
+    </div>
+    <p id="send-info" class="dim">Choose a file. The first QR code holds its metadata.</p>
+    <div class="qr"><canvas id="qr"></canvas></div>
+    <p id="send-status"></p>
+    <button id="start" type="button" disabled>Start transfer</button>
+    <div class="row">
+      <label>Missing numbers from the receiver <input id="missing-in" type="text" placeholder="3F2A:3-5,9" autocomplete="off"></label>
+      <button id="replay" type="button" disabled>Replay missing frames</button>
+    </div>
+    <p id="send-error" class="error"></p>
+  </section>
+
+  <section id="receive" hidden>
+    <button id="cam" type="button">Start camera</button>
+    <button id="reset" type="button">Reset</button>
+    <div class="video"><video id="video" muted playsinline></video></div>
+    <p id="rx-status">Camera is off.</p>
+    <pre id="rx-info"></pre>
+    <div id="missing-box" hidden>
+      <p>Some frames are missing or damaged. Type these numbers into the sender:</p>
+      <pre id="missing-out" class="code"></pre>
+    </div>
+    <button id="show-missing" type="button" hidden>Show missing numbers</button>
+    <button id="download" type="button" hidden>Download</button>
+    <p id="rx-error" class="error"></p>
+  </section>
+
+  <canvas id="scan" hidden></canvas>
+  <script src="vendor/qrcode.js"></script>
+  <script src="vendor/jsQR.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
