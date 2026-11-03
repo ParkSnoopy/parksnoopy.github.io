@@ -23,11 +23,11 @@
       <label>File <input id="file" type="file" /></label>
       <div class="row">
         <label
-          >Bytes per frame
+          >Bytes per frame (<span id="chunk-range"></span>)
           <input id="chunk" type="number" min="100" max="1500" value="500"
         /></label>
         <label
-          >Frames per second
+          >Frames per second (<span id="fps-range"></span>)
           <input id="fps" type="number" min="1" max="15" value="4"
         /></label>
       </div>
@@ -36,7 +36,11 @@
       </p>
       <div class="qr"><canvas id="qr"></canvas></div>
       <p id="send-status"></p>
-      <button id="start" type="button" disabled>Start transfer</button>
+      <div class="row">
+        <button id="start" type="button" disabled>Start transfer</button>
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="reset-send" type="button" disabled>Reset</button>
+      </div>
       <div class="row">
         <label
           >Missing numbers from the receiver

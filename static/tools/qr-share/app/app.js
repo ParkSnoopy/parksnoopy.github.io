@@ -1,6 +1,11 @@
 // UI glue for the QR file transfer tool. All data stays in page memory.
 // All text from the QR codes is written with textContent, never innerHTML.
-import { Receiver, parseMissing, prepareTransfer } from "./protocol.js";
+import {
+  MAX_CHUNK,
+  Receiver,
+  parseMissing,
+  prepareTransfer,
+} from "./protocol.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
@@ -44,7 +49,38 @@ function drawQR(text) {
   }
 }
 
-const fps = () => clamp(parseInt($("fps").value, 10), 1, 15, 4);
+const CHUNK = { min: 100, max: MAX_CHUNK, fallback: 500 };
+const FPS = { min: 1, max: 15, fallback: 4 };
+
+// Keep the inputs and their labels in step with the limits above.
+for (const [id, { min, max }] of [
+  ["chunk", CHUNK],
+  ["fps", FPS],
+]) {
+  $(id).min = min;
+  $(id).max = max;
+  $(`${id}-range`).textContent = `${min} to ${max}`;
+}
+
+// Stop the user from typing a number above the limit. The lower bound is
+// enforced on change, so a number can still be typed digit by digit.
+function capWhileTyping(id, { max }) {
+  $(id).addEventListener("input", () => {
+    if (Number.parseInt($(id).value, 10) > max) $(id).value = max;
+  });
+}
+capWhileTyping("chunk", CHUNK);
+capWhileTyping("fps", FPS);
+
+const readLimited = (id, { min, max, fallback }) =>
+  clamp(parseInt($(id).value, 10), min, max, fallback);
+
+// Replace what the user typed with the value that is really used.
+function showLimited(id, spec) {
+  $(id).value = readLimited(id, spec);
+}
+
+const fps = () => readLimited("fps", FPS);
 
 function updateInfo() {
   if (!transfer) return;
@@ -57,13 +93,14 @@ async function prepare() {
   const file = $("file").files[0];
   if (!file) return;
   const id = ++prepId;
-  clearTimeout(timer);
+  stopRun();
   $("send-error").textContent = "";
   $("start").disabled = $("replay").disabled = true;
   $("send-info").textContent = "Compressing...";
   try {
     const data = new Uint8Array(await file.arrayBuffer());
-    const chunk = clamp(parseInt($("chunk").value, 10), 100, 1500, 500);
+    showLimited("chunk", CHUNK);
+    const chunk = readLimited("chunk", CHUNK);
     const next = await prepareTransfer(file.name, data, chunk);
     if (id !== prepId) return;
     transfer = next;
@@ -77,31 +114,77 @@ async function prepare() {
   }
 }
 
-function play(indexes) {
-  const delay = 1000 / fps();
-  const buttons = [$("start"), $("replay")];
-  for (const b of buttons) b.disabled = true;
-  let k = 0;
-  const step = () => {
-    if (k >= indexes.length) {
-      drawQR(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
-      $("send-status").textContent =
-        "Pass finished. If the receiver shows missing numbers, enter them below.";
-      for (const b of buttons) b.disabled = false;
-      return;
-    }
-    drawQR(transfer.frames[indexes[k]]);
+// The running pass: { indexes, k } while frames play, null otherwise.
+let run = null;
+let paused = false;
+
+function setIdle(idle) {
+  $("start").disabled = $("replay").disabled = !idle;
+  $("pause").disabled = $("reset-send").disabled = idle;
+}
+
+function stopRun() {
+  clearTimeout(timer);
+  run = null;
+  paused = false;
+  $("pause").textContent = "Pause";
+  $("pause").disabled = $("reset-send").disabled = true;
+}
+
+function step() {
+  if (!run || paused) return;
+  const { indexes, k } = run;
+  if (k >= indexes.length) {
+    stopRun();
+    drawQR(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
     $("send-status").textContent =
-      `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
-    k++;
-    timer = setTimeout(step, delay);
-  };
+      "Pass finished. If the receiver shows missing numbers, enter them below.";
+    setIdle(true);
+    return;
+  }
+  drawQR(transfer.frames[indexes[k]]);
+  $("send-status").textContent =
+    `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
+  run.k++;
+  timer = setTimeout(step, 1000 / fps()); // read each time, so a speed change applies at once
+}
+
+function play(indexes) {
+  run = { indexes, k: 0 };
+  paused = false;
+  setIdle(false);
   step();
 }
+
+$("pause").onclick = () => {
+  if (!run) return;
+  paused = !paused;
+  if (paused) {
+    clearTimeout(timer);
+    $("pause").textContent = "Resume";
+    $("send-status").textContent =
+      `Paused after frame ${run.indexes[run.k - 1]}. Press Resume to continue.`;
+  } else {
+    $("pause").textContent = "Pause";
+    step();
+  }
+};
+
+$("reset-send").onclick = () => {
+  stopRun();
+  drawQR(transfer.frames[0]);
+  $("send-status").textContent =
+    "Reset. Show the metadata code again, then press Start transfer.";
+  setIdle(true);
+};
 
 $("file").onchange = prepare;
 $("chunk").onchange = prepare;
 $("fps").oninput = updateInfo;
+$("fps").onchange = () => {
+  showLimited("fps", FPS);
+  updateInfo();
+};
 $("start").onclick = () => {
   $("send-error").textContent = "";
   play(Array.from({ length: transfer.meta.count }, (_, i) => i + 1));

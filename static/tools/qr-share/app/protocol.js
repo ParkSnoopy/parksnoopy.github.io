@@ -8,6 +8,12 @@
 export const TYPE_META = 1;
 export const TYPE_DATA = 2;
 const HEADER = 11;
+
+// A frame is base64 text (4 chars per 3 bytes) in one QR code. QR version 40 at
+// error level M holds 2331 bytes, so the largest payload is the biggest 3-byte
+// multiple that fits, minus the header.
+const QR_CAPACITY = 2331;
+export const MAX_CHUNK = Math.floor(QR_CAPACITY / 4) * 3 - HEADER;
 const MAX_FRAMES = 1_000_000;
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {

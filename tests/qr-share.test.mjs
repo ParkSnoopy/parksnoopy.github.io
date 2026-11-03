@@ -1,7 +1,10 @@
-// Run from the repo root: node --test tests/
+// Run from the repo root: node --test tests/qr-share.test.mjs
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import vm from "node:vm";
 import {
+  MAX_CHUNK,
   Receiver,
   decodeFrame,
   encodeFrame,
@@ -22,6 +25,21 @@ const sample = () => {
   }
   return data;
 };
+
+test("MAX_CHUNK is the largest payload that fits in one QR code", async () => {
+  const ctx = {};
+  vm.runInNewContext(
+    `${readFileSync("static/tools/qr-share/app/vendor/qrcode.js", "utf8")};this.qrcode=qrcode`,
+    ctx,
+  );
+  const fits = (n) => {
+    const qr = ctx.qrcode(0, "M");
+    qr.addData(encodeFrame(TYPE_DATA, 1, 1, new Uint8Array(n)), "Byte");
+    qr.make();
+  };
+  assert.doesNotThrow(() => fits(MAX_CHUNK));
+  assert.throws(() => fits(MAX_CHUNK + 1));
+});
 
 test("frame round trip and CRC rejection", () => {
   const text = encodeFrame(TYPE_DATA, 0xabcd, 42, Uint8Array.of(1, 2, 3));
