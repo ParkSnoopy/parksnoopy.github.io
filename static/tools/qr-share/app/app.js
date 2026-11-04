@@ -1,15 +1,24 @@
-// UI glue for the QR file transfer tool. All data stays in page memory.
-// All text from the QR codes is written with textContent, never innerHTML.
+// UI glue for the color code file transfer tool. All data stays in page memory.
+// All text that comes from a code is written with textContent, never innerHTML.
+import { encodeCells, renderRGBA } from "./codec.js";
 import {
-  MAX_CHUNK,
+  GRIDS,
   Receiver,
+  loadZstd,
   parseMissing,
+  payloadSize,
   prepareTransfer,
 } from "./protocol.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
   Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : fallback));
+
+// Fetch zstd.wasm now, so no request is needed while a transfer runs.
+loadZstd().catch(() => {});
+
+// A pressed button must not stay highlighted. This also covers Pause and Reset.
+document.addEventListener("click", (e) => e.target.closest("button")?.blur());
 
 // ---------- tabs ----------
 
@@ -25,62 +34,46 @@ $("tab-receive").onclick = () => showTab("receive");
 // ---------- sender ----------
 
 let transfer = null;
-let timer = null;
 let prepId = 0;
 
-function drawQR(text) {
-  const qr = qrcode(0, "M"); // type 0 = smallest version that fits
-  qr.addData(text, "Byte");
-  qr.make();
-  const n = qr.getModuleCount();
-  const scale = Math.max(2, Math.floor(560 / (n + 8))); // 4 module quiet zone on each side
-  const size = (n + 8) * scale;
-  const canvas = $("qr");
-  canvas.width = canvas.height = size;
-  const g = canvas.getContext("2d");
-  g.fillStyle = "#fff";
-  g.fillRect(0, 0, size, size);
-  g.fillStyle = "#000";
-  for (let r = 0; r < n; r++) {
-    for (let col = 0; col < n; col++) {
-      if (qr.isDark(r, col))
-        g.fillRect((col + 4) * scale, (r + 4) * scale, scale, scale);
-    }
-  }
+const DEFAULT_GRID = 64;
+for (const g of GRIDS) {
+  const option = document.createElement("option");
+  option.value = g;
+  option.textContent = `${g} x ${g} cells, ${payloadSize(g)} B per frame`;
+  $("grid").append(option);
 }
+$("grid").value = DEFAULT_GRID;
 
-const CHUNK = { min: 100, max: MAX_CHUNK, fallback: 500 };
-const FPS = { min: 1, max: 15, fallback: 4 };
-
-// Keep the inputs and their labels in step with the limits above.
-for (const [id, { min, max }] of [
-  ["chunk", CHUNK],
-  ["fps", FPS],
-]) {
-  $(id).min = min;
-  $(id).max = max;
-  $(`${id}-range`).textContent = `${min} to ${max}`;
-}
+const FPS = { min: 1, max: 60, fallback: 30 };
+$("fps").min = FPS.min;
+$("fps").max = FPS.max;
+$("fps-range").textContent = `${FPS.min} to ${FPS.max}`;
 
 // Stop the user from typing a number above the limit. The lower bound is
 // enforced on change, so a number can still be typed digit by digit.
-function capWhileTyping(id, { max }) {
-  $(id).addEventListener("input", () => {
-    if (Number.parseInt($(id).value, 10) > max) $(id).value = max;
-  });
+$("fps").addEventListener("input", () => {
+  if (Number.parseInt($("fps").value, 10) > FPS.max) $("fps").value = FPS.max;
+});
+
+const fps = () =>
+  clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
+
+function drawFrame(frame) {
+  const G = transfer.meta.grid;
+  const px = Math.max(3, Math.floor(720 / (G + 8)));
+  const img = renderRGBA(encodeCells(frame, G), G, px);
+  const canvas = $("code");
+  if (canvas.width !== img.width) canvas.width = canvas.height = img.width;
+  canvas
+    .getContext("2d")
+    .putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
 }
-capWhileTyping("chunk", CHUNK);
-capWhileTyping("fps", FPS);
 
-const readLimited = (id, { min, max, fallback }) =>
-  clamp(parseInt($(id).value, 10), min, max, fallback);
-
-// Replace what the user typed with the value that is really used.
-function showLimited(id, spec) {
-  $(id).value = readLimited(id, spec);
-}
-
-const fps = () => readLimited("fps", FPS);
+$("code").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else $("code").requestFullscreen?.();
+};
 
 function updateInfo() {
   if (!transfer) return;
@@ -99,12 +92,14 @@ async function prepare() {
   $("send-info").textContent = "Compressing...";
   try {
     const data = new Uint8Array(await file.arrayBuffer());
-    showLimited("chunk", CHUNK);
-    const chunk = readLimited("chunk", CHUNK);
-    const next = await prepareTransfer(file.name, data, chunk);
+    const next = await prepareTransfer(
+      file.name,
+      data,
+      Number($("grid").value),
+    );
     if (id !== prepId) return;
     transfer = next;
-    drawQR(transfer.frames[0]);
+    drawFrame(transfer.frames[0]);
     updateInfo();
     $("send-status").textContent =
       "Show this metadata code to the receiver. Press Start when the receiver is ready.";
@@ -114,9 +109,10 @@ async function prepare() {
   }
 }
 
-// The running pass: { indexes, k } while frames play, null otherwise.
+// The running pass: { indexes, k, due } while frames play, null otherwise.
 let run = null;
 let paused = false;
+let raf = 0;
 
 function setIdle(idle) {
   $("start").disabled = $("replay").disabled = !idle;
@@ -124,65 +120,82 @@ function setIdle(idle) {
 }
 
 function stopRun() {
-  clearTimeout(timer);
+  cancelAnimationFrame(raf);
+  raf = 0;
   run = null;
   paused = false;
   $("pause").textContent = "Pause";
   $("pause").disabled = $("reset-send").disabled = true;
 }
 
-function step() {
-  if (!run || paused) return;
+// Returns false when the pass is over.
+function showNext() {
   const { indexes, k } = run;
   if (k >= indexes.length) {
     stopRun();
-    drawQR(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
+    drawFrame(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
     $("send-status").textContent =
       "Pass finished. If the receiver shows missing numbers, enter them below.";
     setIdle(true);
-    return;
+    return false;
   }
-  drawQR(transfer.frames[indexes[k]]);
+  drawFrame(transfer.frames[indexes[k]]);
   $("send-status").textContent =
     `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
   run.k++;
-  timer = setTimeout(step, 1000 / fps()); // read each time, so a speed change applies at once
+  return true;
+}
+
+// Frames change on screen refreshes only, so every frame stays up for a whole
+// number of refreshes. A timer would give uneven frame times and torn camera images.
+function tick(now) {
+  raf = 0;
+  if (!run || paused) return;
+  const gap = 1000 / fps(); // read each time, so a speed change applies at once
+  if (run.due === 0) run.due = now;
+  if (now + 4 >= run.due) {
+    if (!showNext()) return;
+    run.due = now - run.due > gap ? now + gap : run.due + gap;
+  }
+  raf = requestAnimationFrame(tick);
 }
 
 function play(indexes) {
-  run = { indexes, k: 0 };
+  run = { indexes, k: 0, due: 0 };
   paused = false;
   setIdle(false);
-  step();
+  raf = requestAnimationFrame(tick);
 }
 
 $("pause").onclick = () => {
   if (!run) return;
   paused = !paused;
   if (paused) {
-    clearTimeout(timer);
+    cancelAnimationFrame(raf);
+    raf = 0;
     $("pause").textContent = "Resume";
     $("send-status").textContent =
       `Paused after frame ${run.indexes[run.k - 1]}. Press Resume to continue.`;
   } else {
     $("pause").textContent = "Pause";
-    step();
+    run.due = 0;
+    raf = requestAnimationFrame(tick);
   }
 };
 
 $("reset-send").onclick = () => {
   stopRun();
-  drawQR(transfer.frames[0]);
+  drawFrame(transfer.frames[0]);
   $("send-status").textContent =
     "Reset. Show the metadata code again, then press Start transfer.";
   setIdle(true);
 };
 
 $("file").onchange = prepare;
-$("chunk").onchange = prepare;
+$("grid").onchange = prepare;
 $("fps").oninput = updateInfo;
 $("fps").onchange = () => {
-  showLimited("fps", FPS);
+  $("fps").value = fps();
   updateInfo();
 };
 $("start").onclick = () => {
@@ -202,51 +215,95 @@ $("replay").onclick = () => {
 };
 
 // ---------- receiver ----------
+//
+// The camera is never slowed down by decoding. Every camera frame goes to a worker as a
+// bitmap, and the worker decodes it. The page only counts, stores and draws. If the worker
+// is two frames behind, new camera frames are dropped and counted, never queued.
 
 const rx = new Receiver();
 const video = $("video");
-const scanCanvas = $("scan");
-const scanCtx = scanCanvas.getContext("2d", { willReadFrequently: true });
 let stream = null;
-let detector = null;
+let worker = null;
+let inflight = 0;
 let result = null;
 let assembling = false;
 let failed = false;
 let forceMissing = false;
+const stats = { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 };
 
-async function scanOnce() {
-  if (video.readyState < 2) return null;
-  if (detector) {
-    try {
-      return (await detector.detect(video))[0]?.rawValue ?? null;
-    } catch {
-      return null;
+function startWorker() {
+  worker = new Worker(new URL("./rx-worker.js", import.meta.url), {
+    type: "module",
+  });
+  worker.onmessage = ({ data }) => {
+    inflight--;
+    stats.results++;
+    stats.ms += data.ms;
+    if (data.bytes) {
+      stats.read++;
+      handle(data.bytes);
     }
-  }
-  const k = Math.min(1, 1280 / video.videoWidth);
-  const w = Math.round(video.videoWidth * k);
-  const h = Math.round(video.videoHeight * k);
-  scanCanvas.width = w;
-  scanCanvas.height = h;
-  scanCtx.drawImage(video, 0, 0, w, h);
-  const img = scanCtx.getImageData(0, 0, w, h);
-  return (
-    jsQR(img.data, w, h, { inversionAttempts: "dontInvert" })?.data ?? null
-  );
+  };
+  worker.onerror = (e) => {
+    $("rx-error").textContent = `The decoder stopped: ${e.message}`;
+  };
+  if (rx.meta) worker.postMessage({ type: "grid", grid: rx.meta.grid });
 }
 
 function stopCamera() {
   for (const t of stream?.getTracks() ?? []) t.stop();
   stream = null;
+  video.srcObject = null;
+  worker?.terminate();
+  worker = null;
+  inflight = 0;
 }
 
-async function loop() {
-  while (stream) {
-    const text = await scanOnce();
-    if (text && stream) handle(text);
-    await new Promise(requestAnimationFrame);
+function grab() {
+  stats.camera++;
+  if (inflight >= 2) {
+    stats.skipped++;
+    return;
   }
+  inflight++;
+  createImageBitmap(video).then(
+    (bitmap) => worker?.postMessage({ type: "frame", bitmap }, [bitmap]),
+    () => {
+      inflight--;
+    },
+  );
 }
+
+// One grab per new camera frame, not per screen refresh.
+function pump() {
+  if (video.requestVideoFrameCallback) {
+    const next = () => {
+      if (!stream) return;
+      grab();
+      video.requestVideoFrameCallback(next);
+    };
+    video.requestVideoFrameCallback(next);
+    return;
+  }
+  let last = -1;
+  const poll = () => {
+    if (!stream) return;
+    if (video.currentTime !== last) {
+      last = video.currentTime;
+      grab();
+    }
+    requestAnimationFrame(poll);
+  };
+  poll();
+}
+
+setInterval(() => {
+  if (!stream) return;
+  const { camera, results, read, skipped, ms } = stats;
+  $("rx-stats").textContent =
+    `Camera ${camera} frames/s, read ${read}/s, dropped while busy ${skipped}/s, decode ${results ? (ms / results).toFixed(1) : "0"} ms`;
+  Object.assign(stats, { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 });
+}, 1000);
 
 $("cam").onclick = async () => {
   $("rx-error").textContent = "";
@@ -262,6 +319,8 @@ $("cam").onclick = async () => {
         facingMode: "environment",
         width: { ideal: 1280 },
         height: { ideal: 720 },
+        // The camera must run at twice the sender rate to catch every frame.
+        frameRate: { ideal: 60 },
       },
       audio: false,
     });
@@ -272,18 +331,9 @@ $("cam").onclick = async () => {
     $("rx-error").textContent = cameraError(e);
     return;
   }
-  try {
-    if (
-      window.BarcodeDetector &&
-      (await BarcodeDetector.getSupportedFormats()).includes("qr_code")
-    ) {
-      detector = new BarcodeDetector({ formats: ["qr_code"] });
-    }
-  } catch {
-    detector = null; // jsQR is the fallback
-  }
+  startWorker();
   render();
-  loop();
+  pump();
 };
 
 function cameraError(e) {
@@ -303,6 +353,7 @@ function cameraError(e) {
 
 $("reset").onclick = () => {
   rx.reset();
+  worker?.postMessage({ type: "grid", grid: null });
   result = null;
   failed = false;
   forceMissing = false;
@@ -324,10 +375,22 @@ $("download").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 };
 
-function handle(text) {
-  const event = rx.feed(text);
+let renderTimer = 0;
+// Redraw at most ten times a second, whatever the frame rate is.
+function requestRender() {
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => {
+    renderTimer = 0;
+    render();
+  }, 100);
+}
+
+function handle(bytes) {
+  const event = rx.feed(bytes);
+  if (event === "meta")
+    worker?.postMessage({ type: "grid", grid: rx.meta.grid });
   if (event === "duplicate" || event === "foreign") return;
-  render();
+  requestRender();
   if (rx.complete() && !result && !assembling && !failed) finish();
 }
 
@@ -336,12 +399,12 @@ async function finish() {
   try {
     result = await rx.assemble();
     stopCamera();
-    render();
   } catch (e) {
     failed = true;
     $("rx-error").textContent = e.message;
   } finally {
     assembling = false;
+    render();
   }
 }
 
@@ -356,7 +419,7 @@ function render() {
     status = "Ready. Press Start transfer on the sender.";
   else if (m) status = "Receiving...";
   else if (stream)
-    status = "Point the camera at the metadata QR code on the sender.";
+    status = "Point the camera at the metadata code on the sender.";
   $("rx-status").textContent = status;
 
   $("rx-info").textContent = m

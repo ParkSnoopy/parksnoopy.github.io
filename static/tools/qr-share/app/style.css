@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #000;
   --fg: #f6f5f4;
   --accent: #2ec27e;
@@ -40,7 +41,8 @@ nav {
   margin: 1rem 0;
 }
 button,
-input {
+input,
+select {
   font: inherit;
   color: var(--fg);
   background: var(--bg);
@@ -51,11 +53,18 @@ input {
 button {
   cursor: pointer;
   color: var(--accent);
+  -webkit-tap-highlight-color: transparent;
 }
-button:hover:not(:disabled),
 .tab.active {
   background: var(--accent);
   color: var(--bg);
+}
+/* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
+@media (hover: hover) {
+  button:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--bg);
+  }
 }
 button:disabled {
   opacity: 0.4;
@@ -71,9 +80,11 @@ input[type="file"]::file-selector-button {
   margin-right: 0.8rem;
   cursor: pointer;
 }
-input[type="file"]::file-selector-button:hover {
-  background: var(--accent);
-  color: var(--bg);
+@media (hover: hover) {
+  input[type="file"]::file-selector-button:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
 }
 input[type="number"] {
   appearance: textfield;
@@ -84,7 +95,8 @@ input[type="number"]::-webkit-outer-spin-button {
   margin: 0;
 }
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -92,7 +104,8 @@ label {
   display: block;
   margin: 0.5rem 0;
 }
-label input {
+label input,
+label select {
   display: block;
   width: 100%;
   margin-top: 0.25rem;
@@ -106,18 +119,27 @@ label input {
 .row label {
   flex: 1 1 12rem;
 }
-.qr,
+.shown,
 .video {
   display: flex;
   justify-content: center;
   margin: 1rem 0;
 }
-#qr {
+/* Cells must stay as large as the screen allows, or the camera cannot tell them apart. */
+#code {
   background: #fff;
   image-rendering: pixelated;
-  width: 100%;
-  max-width: 560px;
+  width: min(100%, 85vh);
   height: auto;
+  cursor: zoom-in;
+}
+#code:fullscreen {
+  width: auto;
+  height: 100vh;
+  max-width: 100vw;
+  object-fit: contain;
+  background: #000;
+  cursor: zoom-out;
 }
 video {
   width: 100%;

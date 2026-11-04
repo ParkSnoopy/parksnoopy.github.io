@@ -1,20 +1,34 @@
-// Wire format and reassembly for the QR file transfer tool. No DOM access.
+// Wire format and reassembly for the file transfer tool. No DOM access.
 //
-// Every QR code carries one frame: base64( header + payload ).
-// Header (11 bytes, big endian): type u8, transfer id u16, index u32, crc32 u32.
-// The CRC covers the whole frame with the CRC field set to zero.
-// Index 0 is the metadata frame (JSON). Indexes 1..count are gzip data chunks.
+// Every code carries one frame: a header and a payload. The codec pads the rest.
+// Header (13 bytes, big endian): type u8, transfer id u16, index u32, payload length u16, crc32 u32.
+// The CRC covers the header (CRC field set to zero) and the payload.
+// Index 0 is the metadata frame (JSON). Indexes 1..count are chunks of the zstd-compressed file.
 
+import { GRIDS, capacity } from "./codec.js";
+import { compress, decompress, init } from "./vendor/zstd.js";
+
+export { GRIDS };
 export const TYPE_META = 1;
 export const TYPE_DATA = 2;
-const HEADER = 11;
-
-// A frame is base64 text (4 chars per 3 bytes) in one QR code. QR version 40 at
-// error level M holds 2331 bytes, so the largest payload is the biggest 3-byte
-// multiple that fits, minus the header.
-const QR_CAPACITY = 2331;
-export const MAX_CHUNK = Math.floor(QR_CAPACITY / 4) * 3 - HEADER;
+export const HEADER = 13;
 const MAX_FRAMES = 1_000_000;
+const MAX_SIZE = 2 ** 30; // zstd-wasm runs in 32-bit memory
+const NAME_MAX = 96; // the metadata frame of the smallest grid must still fit
+// shortcut: compression runs on the page thread. Level 12 takes about 0.5 s per 8 MiB,
+// level 19 about 12 s. Move it to a worker before raising the level.
+const ZSTD_LEVEL = 12;
+
+// File bytes that one code carries.
+export const payloadSize = (grid) => capacity(grid) - HEADER;
+
+let zstdReady = null;
+// Browsers call this without an argument, and zstd.wasm loads from next to zstd.js.
+// Tests pass the bytes of the wasm file instead.
+export function loadZstd(wasm) {
+  zstdReady ??= init(wasm);
+  return zstdReady;
+}
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -28,44 +42,28 @@ export function crc32(bytes) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-export function toBase64(bytes) {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(s);
-}
-
-function fromBase64(text) {
-  const s = atob(text);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
-}
-
 export function encodeFrame(type, tid, index, payload) {
   const buf = new Uint8Array(HEADER + payload.length);
   const view = new DataView(buf.buffer);
   view.setUint8(0, type);
   view.setUint16(1, tid);
   view.setUint32(3, index);
+  view.setUint16(7, payload.length);
   buf.set(payload, HEADER);
-  view.setUint32(7, crc32(buf)); // CRC field is still zero while hashing
-  return toBase64(buf);
+  view.setUint32(9, crc32(buf)); // CRC field is still zero while hashing
+  return buf;
 }
 
-// Returns null for text that is not a valid frame (foreign QR, bad base64, bad CRC).
-export function decodeFrame(text) {
-  let buf;
-  try {
-    buf = fromBase64(text.trim());
-  } catch {
-    return null;
-  }
-  if (buf.length < HEADER) return null;
+// Returns null for bytes that are not a valid frame (foreign code, damage, bad CRC).
+// Bytes after the payload are padding and are ignored.
+export function decodeFrame(bytes) {
+  if (bytes.length < HEADER) return null;
+  const len = new DataView(bytes.buffer, bytes.byteOffset).getUint16(7);
+  if (HEADER + len > bytes.length) return null;
+  const buf = bytes.slice(0, HEADER + len);
   const view = new DataView(buf.buffer);
-  const crc = view.getUint32(7);
-  view.setUint32(7, 0);
+  const crc = view.getUint32(9);
+  view.setUint32(9, 0);
   if (crc32(buf) !== crc) return null;
   return {
     type: view.getUint8(0),
@@ -75,32 +73,28 @@ export function decodeFrame(text) {
   };
 }
 
-export async function gzip(bytes) {
-  const out = new Blob([bytes])
-    .stream()
-    .pipeThrough(new CompressionStream("gzip"));
-  return new Uint8Array(await new Response(out).arrayBuffer());
-}
-
-// Stops reading once the output passes `limit`, so a hostile stream cannot fill memory.
-export async function gunzip(bytes, limit) {
-  const reader = new Blob([bytes])
-    .stream()
-    .pipeThrough(new DecompressionStream("gzip"))
-    .getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.length;
-    if (total > limit) {
-      await reader.cancel();
-      throw new Error("Decompressed data is larger than announced.");
-    }
-    chunks.push(value);
-  }
-  return concat(chunks, total);
+// The size that a zstd frame announces in its header, or -1 when it announces none.
+export function zstdContentSize(b) {
+  if (
+    b.length < 6 ||
+    b[0] !== 0x28 ||
+    b[1] !== 0xb5 ||
+    b[2] !== 0x2f ||
+    b[3] !== 0xfd
+  )
+    return -1;
+  const flags = b[4];
+  const single = (flags >> 5) & 1;
+  const sizeBytes = flags >> 6 ? [0, 2, 4, 8][flags >> 6] : single;
+  if (!sizeBytes) return -1;
+  const at = 5 + (1 - single) + [0, 1, 2, 4][flags & 3];
+  if (at + sizeBytes > b.length) return -1;
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (sizeBytes === 1) return b[at];
+  if (sizeBytes === 2) return view.getUint16(at, true) + 256;
+  if (sizeBytes === 4) return view.getUint32(at, true);
+  const n = view.getBigUint64(at, true);
+  return n > BigInt(Number.MAX_SAFE_INTEGER) ? -1 : Number(n);
 }
 
 function concat(chunks, total) {
@@ -118,16 +112,28 @@ async function sha256Hex(bytes) {
   return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function prepareTransfer(name, data, chunkSize) {
-  const packed = await gzip(data);
+function shortName(name) {
+  if (name.length <= NAME_MAX) return name;
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+  return name.slice(0, NAME_MAX - ext.length) + ext;
+}
+
+export async function prepareTransfer(name, data, grid) {
+  if (!GRIDS.includes(grid)) throw new Error("Unknown code size.");
+  if (data.length > MAX_SIZE) throw new Error("The file is larger than 1 GiB.");
+  await loadZstd();
+  const packed = compress(data, ZSTD_LEVEL);
   const tid = crypto.getRandomValues(new Uint16Array(1))[0];
-  const count = Math.max(1, Math.ceil(packed.length / chunkSize));
+  const chunk = payloadSize(grid);
+  const count = Math.max(1, Math.ceil(packed.length / chunk));
   const meta = {
-    name,
+    name: shortName(name),
     size: data.length,
     packed: packed.length,
-    chunk: chunkSize,
+    chunk,
     count,
+    grid,
     sha256: await sha256Hex(packed),
   };
   const frames = [
@@ -138,16 +144,15 @@ export async function prepareTransfer(name, data, chunkSize) {
       new TextEncoder().encode(JSON.stringify(meta)),
     ),
   ];
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < count; i++)
     frames.push(
       encodeFrame(
         TYPE_DATA,
         tid,
         i + 1,
-        packed.subarray(i * chunkSize, (i + 1) * chunkSize),
+        packed.subarray(i * chunk, (i + 1) * chunk),
       ),
     );
-  }
   return { tid, meta, frames };
 }
 
@@ -174,10 +179,11 @@ function validMeta(m) {
   return (
     m &&
     typeof m.name === "string" &&
-    m.name.length <= 255 &&
-    int(m.size, 0, 2 ** 32) &&
+    m.name.length <= NAME_MAX &&
+    int(m.size, 0, MAX_SIZE) &&
     int(m.packed, 0, 2 ** 32) &&
-    int(m.chunk, 1, 1 << 20) &&
+    GRIDS.includes(m.grid) &&
+    m.chunk === payloadSize(m.grid) &&
     int(m.count, 1, MAX_FRAMES) &&
     m.count === Math.max(1, Math.ceil(m.packed / m.chunk)) &&
     typeof m.sha256 === "string" &&
@@ -221,8 +227,8 @@ export class Receiver {
   }
 
   // Returns one of: "meta", "data", "pass-end", "duplicate", "foreign", "bad".
-  feed(text) {
-    const f = decodeFrame(text);
+  feed(bytes) {
+    const f = decodeFrame(bytes);
     if (!f) {
       if (this.meta) this.bad++;
       return "bad";
@@ -266,7 +272,18 @@ export class Receiver {
     const joined = concat(chunks, packed);
     if ((await sha256Hex(joined)) !== sha256)
       throw new Error("Checksum mismatch. Reset and send again.");
-    const bytes = await gunzip(joined, size);
+    // zstd-wasm sizes its output buffer from the frame header, so check it first.
+    if (zstdContentSize(joined) !== size)
+      throw new Error(
+        "Compressed data does not announce the size in the metadata.",
+      );
+    await loadZstd();
+    let bytes;
+    try {
+      bytes = decompress(joined);
+    } catch {
+      throw new Error("Decompression failed.");
+    }
     if (bytes.length !== size)
       throw new Error("Decompressed size does not match the metadata.");
     return { name: name.replace(/[\\/]/g, "_") || "received.bin", bytes };
