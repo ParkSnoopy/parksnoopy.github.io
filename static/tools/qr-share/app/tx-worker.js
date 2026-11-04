@@ -33,6 +33,8 @@
 
   const MODES = [68, 66, 67, 4];
   const DEFAULT_MODE = 68;
+  const PART_SIZE = 10 * 1024 * 1024;
+  const MAX_PARTS = 120;
 
   const fail = (message) => self.postMessage({ type: "error", message });
   const nextFrame =
@@ -43,6 +45,10 @@
   let lib = null;
   let mode = DEFAULT_MODE;
   let encoded = false;
+  let source = null;
+  let part = 0;
+  let parts = 0;
+  let transferId = "";
 
   // The page shows this canvas through a placeholder, which needs the real proportions.
   const ratio = () => self.Module.canvas.width / self.Module.canvas.height;
@@ -78,7 +84,25 @@
   // Returns false when a newer file replaced this one.
   async function encodeFile(file, token) {
     const chunk = lib._cimbare_encode_bufsize() * 16;
-    const name = new TextEncoder().encode(file.name);
+    let name = part < 0 ? "cimbar-info-v1" : source.name;
+    if (parts > 1 && part >= 0) {
+      const hash = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
+      );
+      if (token !== generation) return false;
+      const digest = Array.from(hash, (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const filename = btoa(
+        Array.from(new TextEncoder().encode(source.name), (b) =>
+          String.fromCharCode(b),
+        ).join(""),
+      );
+      name = `cimbar-part-v1.${transferId}.${part}.${parts}.${source.size}.${digest}.${filename}`;
+    }
+    name = new TextEncoder().encode(name);
+    if (name.length > 1023)
+      throw new Error("The file name is too long to transfer.");
     const namePtr = lib._malloc(Math.max(1, name.length));
     lib.HEAPU8.set(name, namePtr);
     const res = lib._cimbare_init_encode(namePtr, name.length, -1);
@@ -115,6 +139,7 @@
   let raf = 0;
   let statsTimer = 0;
   let shownAt = [];
+  let playbackGeneration = 0;
 
   function showFrame(now) {
     if (lib._cimbare_render() === 1) shownAt.push(now);
@@ -142,6 +167,7 @@
   }
 
   function stop() {
+    playbackGeneration++;
     run = null;
     if (raf && typeof self.cancelAnimationFrame === "function")
       self.cancelAnimationFrame(raf);
@@ -173,12 +199,81 @@
         case "file":
           stop();
           encoded = false;
-          if (await encodeFile(data.file, ++generation))
+          ++generation;
+          source = data.file;
+          parts = Math.max(1, Math.ceil(source.size / PART_SIZE));
+          if (parts > MAX_PARTS)
+            throw new Error(
+              `The file exceeds the ${MAX_PARTS * 10} MiB transfer limit.`,
+            );
+          transferId = crypto.randomUUID();
+          part = parts > 1 ? -1 : 0;
+          const first =
+            part < 0
+              ? new Blob([
+                  JSON.stringify({
+                    id: transferId,
+                    name: source.name,
+                    size: source.size,
+                    count: parts,
+                  }),
+                ])
+              : source.slice(0, PART_SIZE, source.type);
+          if (await encodeFile(first, ++generation))
             self.postMessage({
               type: "encoded",
               payload: lib._cimbard_get_bufsize(),
+              part: part + 1,
+              parts,
             });
           break;
+        case "part": {
+          if (
+            !source ||
+            data.index < -1 ||
+            data.index >= parts ||
+            data.index === part
+          )
+            break;
+          const wasRunning = run && !run.paused;
+          const currentFps = run?.fps;
+          stop();
+          const playbackToken = playbackGeneration;
+          encoded = false;
+          part = data.index;
+          self.postMessage({ type: "encoding", part: part + 1, parts });
+          const slice =
+            part < 0
+              ? new Blob([
+                  JSON.stringify({
+                    id: transferId,
+                    name: source.name,
+                    size: source.size,
+                    count: parts,
+                  }),
+                ])
+              : source.slice(
+                  part * PART_SIZE,
+                  (part + 1) * PART_SIZE,
+                  source.type,
+                );
+          if (await encodeFile(slice, ++generation)) {
+            const running = wasRunning && playbackToken === playbackGeneration;
+            self.postMessage({
+              type: "encoded",
+              payload: lib._cimbard_get_bufsize(),
+              part: part + 1,
+              parts,
+              running,
+            });
+            if (running) {
+              run = { fps: currentFps, due: 0, paused: false };
+              statsTimer = setInterval(reportStats, 500);
+              raf = nextFrame(tick);
+            }
+          }
+          break;
+        }
         case "play":
           if (!encoded) break;
           stop();

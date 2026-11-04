@@ -50,6 +50,17 @@ let payload = 0; // bytes of code data per frame in the current mode
 let encoded = false;
 let paused = false;
 let sendStart = 0;
+let sendPart = 1;
+let sendParts = 1;
+
+function partStatus() {
+  const label = sendPart
+    ? `Part ${sendPart} of ${sendParts}`
+    : "File information";
+  return sendPart === sendParts
+    ? `${label}. Keep sending until the receiver says Done.`
+    : `${label}. Advance when the receiver confirms.`;
+}
 
 function updateInfo() {
   const file = $("file").files[0];
@@ -107,17 +118,34 @@ function startSender() {
       case "encoded":
         encoded = true;
         payload = data.payload;
+        sendPart = data.part;
+        sendParts = data.parts;
+        $("previous-part").hidden = $("next-part").hidden = sendParts === 1;
+        $("previous-part").disabled = sendPart === 0;
+        $("next-part").disabled = sendPart === sendParts;
         updateInfo();
         $("send-status").textContent =
-          "Ready. Press Start transfer when the receiver is ready.";
-        setIdle(true);
+          sendParts > 1
+            ? partStatus()
+            : "Ready. Press Start transfer when the receiver is ready.";
+        setIdle(!data.running);
+        break;
+      case "encoding":
+        encoded = false;
+        $("start").disabled = $("pause").disabled = true;
+        $("previous-part").disabled = $("next-part").disabled = true;
+        $("send-status").textContent = data.part
+          ? `Encoding part ${data.part} of ${data.parts}...`
+          : "Encoding file information...";
         break;
       case "stats":
         if (paused) break;
         $("send-rate").textContent =
           `Transfer rate: ${fmtRate(data.fps * payload)} (${data.fps} frames/s)`;
         $("send-status").textContent =
-          `Sending for ${Math.round((performance.now() - sendStart) / 1000)} s. Press Reset when the receiver says Done.`;
+          sendParts > 1
+            ? partStatus()
+            : `Sending for ${Math.round((performance.now() - sendStart) / 1000)} s. Press Reset when the receiver says Done.`;
         break;
       case "error":
         $("send-error").textContent = data.message;
@@ -139,6 +167,7 @@ function prepare() {
   $("send-error").textContent = "";
   $("send-status").textContent = "";
   $("send-info").textContent = "Compressing and encoding...";
+  $("previous-part").hidden = $("next-part").hidden = true;
   tx.postMessage({ type: "file", file });
 }
 
@@ -180,6 +209,11 @@ $("reset-send").onclick = () => {
   $("send-status").textContent = "Stopped. Press Start transfer to send again.";
 };
 
+$("previous-part").onclick = () =>
+  tx.postMessage({ type: "part", index: sendPart - 2 });
+$("next-part").onclick = () =>
+  tx.postMessage({ type: "part", index: sendPart });
+
 startSender();
 
 // ---------- receiver ----------
@@ -205,7 +239,109 @@ let firstAt = 0; // time of the first new block
 let doneAt = 0;
 let seen = new Set();
 let rateWindow = [];
+let receivedParts = null;
+let receiveGeneration = 0;
+let partNotice = "";
 const stats = { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 };
+
+async function receivePart(data) {
+  if (data.name === "cimbar-info-v1") {
+    if (data.blob.size > 4096) throw new Error("Invalid transfer information.");
+    const generation = receiveGeneration;
+    const info = JSON.parse(await data.blob.text());
+    if (generation !== receiveGeneration) return null;
+    if (
+      !/^[0-9a-f-]{36}$/.test(info.id) ||
+      typeof info.name !== "string" ||
+      !info.name ||
+      !Number.isSafeInteger(info.size) ||
+      !Number.isInteger(info.count) ||
+      info.count < 2 ||
+      info.count > 120 ||
+      info.count !== Math.ceil(info.size / (10 * 1024 * 1024))
+    )
+      throw new Error("Invalid transfer information.");
+    if (
+      receivedParts &&
+      (receivedParts.id !== info.id ||
+        receivedParts.name !== info.name ||
+        receivedParts.size !== info.size ||
+        receivedParts.parts.length !== info.count)
+    )
+      throw new Error(
+        "A different transfer is already in progress. Reset the receiver first.",
+      );
+    receivedParts ??= {
+      id: info.id,
+      name: info.name,
+      size: info.size,
+      parts: Array(info.count).fill(null),
+    };
+    progress = 0;
+    partNotice =
+      "File information received. Advance the sender to the first part.";
+    render();
+    return null;
+  }
+  const fields = data.name.split(".");
+  if (fields[0] !== "cimbar-part-v1") return data;
+  if (
+    fields.length !== 7 ||
+    !/^[0-9a-f-]{36}$/.test(fields[1]) ||
+    !/^\d+$/.test(fields[2]) ||
+    !/^\d+$/.test(fields[3]) ||
+    !/^\d+$/.test(fields[4]) ||
+    !/^[0-9a-f]{64}$/.test(fields[5])
+  )
+    throw new Error("Invalid transfer part metadata.");
+  const [, id, partText, countText, sizeText, hash, encodedName] = fields;
+  const index = Number(partText),
+    count = Number(countText),
+    size = Number(sizeText);
+  const partSize = 10 * 1024 * 1024;
+  if (
+    !Number.isSafeInteger(size) ||
+    count < 2 ||
+    count > 120 ||
+    count !== Math.ceil(size / partSize) ||
+    index >= count ||
+    data.blob.size !== Math.min(partSize, size - index * partSize)
+  )
+    throw new Error("Invalid transfer part size.");
+  const name = new TextDecoder("utf-8", { fatal: true }).decode(
+    Uint8Array.from(atob(encodedName), (c) => c.charCodeAt(0)),
+  );
+  if (!name) throw new Error("Invalid transfer file name.");
+  if (
+    receivedParts &&
+    (receivedParts.id !== id ||
+      receivedParts.name !== name ||
+      receivedParts.size !== size ||
+      receivedParts.parts.length !== count)
+  )
+    throw new Error(
+      "A different transfer is already in progress. Reset the receiver first.",
+    );
+  const generation = receiveGeneration;
+  const bytes = await data.blob.arrayBuffer();
+  const digest = Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+    (b) => b.toString(16).padStart(2, "0"),
+  ).join("");
+  if (generation !== receiveGeneration) return null;
+  if (digest !== hash)
+    throw new Error(`Part ${index + 1} failed its integrity check.`);
+  receivedParts ??= { id, name, size, parts: Array(count).fill(null) };
+  receivedParts.parts[index] = data.blob;
+  const have = receivedParts.parts.filter(Boolean).length;
+  if (have !== count) {
+    progress = 0;
+    partNotice = `Part ${index + 1} received. Advance the sender to the next part.`;
+    render();
+    return null;
+  }
+  return { name, blob: new Blob(receivedParts.parts) };
+}
 
 // Identical blocks carry nothing new, so a frozen sender screen does not count as progress.
 function fingerprint(buff) {
@@ -231,7 +367,7 @@ function startSink() {
   sink?.terminate();
   sinkReady = false;
   sink = new Worker(new URL("./sink-worker.js", import.meta.url));
-  sink.onmessage = ({ data }) => {
+  sink.onmessage = async ({ data }) => {
     switch (data.type) {
       case "ready":
         sinkReady = true;
@@ -240,8 +376,14 @@ function startSink() {
         progress = data.progress;
         requestRender();
         break;
-      case "done":
-        result = { name: data.name, blob: data.blob };
+      case "done": {
+        try {
+          result = await receivePart(data);
+        } catch (e) {
+          $("rx-error").textContent = e.message;
+          break;
+        }
+        if (!result) break;
         doneAt = performance.now();
         progress = 1;
         stopCamera();
@@ -250,6 +392,7 @@ function startSink() {
         sinkReady = false;
         render();
         break;
+      }
       case "error":
         $("rx-error").textContent = data.message;
         break;
@@ -402,6 +545,9 @@ function cameraError(e) {
 
 // The fountain decoder keeps its state inside the WASM module, so a reset starts a new worker.
 $("reset").onclick = () => {
+  ++receiveGeneration;
+  receivedParts = null;
+  partNotice = "";
   sink?.terminate();
   sink = null;
   sinkReady = false;
@@ -439,6 +585,7 @@ function requestRender() {
 function render() {
   let status = "Camera is off.";
   if (result) status = "Done. libcimbar rebuilt and decompressed the file.";
+  else if (partNotice) status = partNotice;
   else if (firstAt) status = "Receiving...";
   else if (stream) status = "Point the camera at the code on the sender.";
   $("rx-status").textContent = status;
@@ -449,6 +596,10 @@ function render() {
       `Average rate: ${fmtRate(result.blob.size / Math.max(seconds, 0.001))} (${fmtBytes(result.blob.size)} in ${seconds.toFixed(1)} s)`;
     $("rx-info").textContent =
       `File: ${result.name}\nSize: ${result.blob.size} B`;
+  } else if (receivedParts) {
+    const have = receivedParts.parts.filter(Boolean).length;
+    $("rx-info").textContent =
+      `File: ${receivedParts.name}\nSize: ${receivedParts.size} B\nParts complete: ${have} of ${receivedParts.parts.length}\nCurrent part: ${Math.round(progress * 100)}%`;
   } else {
     $("rx-info").textContent = firstAt
       ? `Progress: ${Math.round(progress * 100)}%\nBlocks received: ${seen.size}`
