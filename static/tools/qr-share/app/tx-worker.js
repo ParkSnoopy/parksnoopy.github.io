@@ -175,6 +175,13 @@
     lib._cimbare_next_frame(false);
   }
 
+  // Draws the current code once. libcimbar nudges the picture on every render and builds a
+  // new block for every frame, so a code that must hold still gets exactly one render.
+  function showStill() {
+    lib._cimbare_next_frame(false);
+    lib._cimbare_render();
+  }
+
   // Frames change on screen refreshes only, so every frame stays up for a whole
   // number of refreshes. A timer would give uneven frame times and torn camera images.
   function tick(now) {
@@ -185,7 +192,7 @@
     if (now + 4 >= run.due) {
       showFrame(now);
       run.due = now - run.due > gap ? now + gap : run.due + gap;
-      if (!run.preview && ++run.frames >= frameLimit) {
+      if (++run.frames >= frameLimit) {
         advance();
         return;
       }
@@ -293,15 +300,7 @@
               part: part + 1,
               parts,
             });
-            run = {
-              fps: data.fps,
-              due: 0,
-              paused: false,
-              preview: true,
-              frames: 0,
-              encoding: false,
-            };
-            raf = nextFrame(tick);
+            showStill();
           }
           break;
         case "play":
@@ -311,14 +310,12 @@
               fps: data.fps,
               due: 0,
               paused: false,
-              preview: false,
               frames: 0,
               encoding: false,
             };
             raf = nextFrame(tick);
           } else {
             run.fps = data.fps;
-            run.preview = false;
             run.frames = 0;
           }
           statsTimer = setInterval(reportStats, 500);

@@ -166,8 +166,11 @@ $("code").onclick = () => {
 };
 
 $("file").onchange = prepare;
-$("mode").onchange = () =>
+$("mode").onchange = () => {
   tx?.postMessage({ type: "mode", mode: Number($("mode").value) });
+  // The still metadata code was built for the old chunk size, so build it again.
+  if ($("file").files[0]) prepare();
+};
 $("fps").oninput = () => tx?.postMessage({ type: "fps", fps: fps() });
 $("fps").onchange = () => {
   $("fps").value = fps();
@@ -217,6 +220,7 @@ let sink = null;
 let sinkReady = false;
 let lockedMode = 0; // 0 while the mode is unknown. Then the receiver tries each one in turn.
 let counter = 0;
+let useFrames = typeof VideoFrame === "function";
 let result = null;
 let progress = 0;
 let firstAt = 0; // time of the first new block
@@ -433,6 +437,21 @@ function grab() {
   }
   w.busy = true;
   const mode = lockedMode || MODE_CYCLE[counter++ % MODE_CYCLE.length];
+  // A VideoFrame keeps the camera's own pixel format, so the worker skips the canvas and
+  // the RGBA conversion. Browsers without it fall back to a bitmap.
+  if (useFrames) {
+    let frame;
+    try {
+      frame = new VideoFrame(video, {
+        timestamp: Math.round(video.currentTime * 1e6),
+      });
+      w.postMessage({ type: "frame", frame, mode }, [frame]);
+      return;
+    } catch {
+      frame?.close();
+      useFrames = false;
+    }
+  }
   createImageBitmap(video).then(
     (bitmap) => w.postMessage({ type: "frame", bitmap, mode }, [bitmap]),
     () => {
