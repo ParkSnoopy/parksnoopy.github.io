@@ -1,0 +1,175 @@
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --fg: #f6f5f4;
+  --accent: #2ec27e;
+  --button-fg: #fff;
+  --button-active-fg: #000;
+  --dim: #8a8a8a;
+  --err: #ff6b6b;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 1rem;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    16px/1.54 "Fira Code",
+    "JetBrains Mono",
+    Consolas,
+    monospace;
+}
+a {
+  color: var(--accent);
+}
+h1 {
+  font-size: 1.45rem;
+  margin: 0.5rem 0;
+}
+.dim {
+  color: var(--dim);
+}
+.error {
+  color: var(--err);
+  min-height: 1.5em;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  padding: 0.4rem 0.8rem;
+  border-radius: 0;
+}
+button {
+  cursor: pointer;
+  color: var(--button-fg);
+  -webkit-tap-highlight-color: transparent;
+}
+/* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
+@media (hover: hover) {
+  button:hover:not(:disabled):not(#reset) {
+    background: var(--accent);
+    color: var(--button-active-fg);
+  }
+  #reset:active {
+    background: var(--accent);
+    color: var(--button-active-fg);
+  }
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--button-fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  padding: 0.4rem 0.8rem;
+  margin-right: 0.8rem;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  input[type="file"]::file-selector-button:hover {
+    background: var(--accent);
+    color: var(--button-active-fg);
+  }
+}
+input[type="number"] {
+  appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+label {
+  display: block;
+  margin: 0.5rem 0;
+}
+label input,
+label select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.row label {
+  flex: 1 1 12rem;
+}
+.shown,
+.video {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+/* The script sizes the code so its cells are as large as the screen allows. The white
+   margin around each QR code is part of the picture and must stay white. */
+#code {
+  background: #fff;
+  cursor: zoom-in;
+}
+/* The ACK code is read by the other device's camera, so it keeps hard edges and a white margin. */
+#ack {
+  background: #fff;
+  image-rendering: pixelated;
+}
+#tx-video {
+  max-width: 14rem;
+}
+.shown:fullscreen {
+  align-items: center;
+  margin: 0;
+  background: #000;
+}
+.shown:fullscreen #code {
+  cursor: zoom-out;
+}
+/* Only shown in full screen, where it sits in a corner outside the code. */
+.osd {
+  display: none;
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+.shown:fullscreen .osd.on {
+  display: block;
+}
+video {
+  width: 100%;
+  max-height: 60vh;
+  background: #111;
+}
+pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.code {
+  font-size: 1.4rem;
+  color: var(--accent);
+  border: 1px dashed var(--accent);
+  padding: 0.5rem;
+}

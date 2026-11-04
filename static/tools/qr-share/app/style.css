@@ -37,6 +37,11 @@ h1 {
   color: var(--err);
   min-height: 1.5em;
 }
+nav {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
 button,
 input,
 select {
@@ -51,6 +56,10 @@ button {
   cursor: pointer;
   color: var(--button-fg);
   -webkit-tap-highlight-color: transparent;
+}
+.tab.active {
+  background: var(--accent);
+  color: var(--button-active-fg);
 }
 /* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
 @media (hover: hover) {
@@ -127,14 +136,6 @@ label select {
 #code {
   background: #fff;
   cursor: zoom-in;
-}
-/* The ACK code is read by the other device's camera, so it keeps hard edges and a white margin. */
-#ack {
-  background: #fff;
-  image-rendering: pixelated;
-}
-#tx-video {
-  max-width: 14rem;
 }
 .shown:fullscreen {
   align-items: center;

@@ -9,50 +9,18 @@
   <body>
     <p><a href="../">&lt; back to the tool page</a></p>
     <h1>QR file share</h1>
-    <div id="intro">
-      <p class="dim">
-        Everything runs in this page. Nothing is uploaded, and nothing leaves
-        your device after the page has loaded.
-      </p>
-      <p class="dim">
-        Open a file to send it. It shows a code that names the file. Otherwise
-        this page waits with its camera on and becomes the receiver as soon as
-        it reads such a code. The receiver's answer starts the sender.
-      </p>
-    </div>
+    <p class="dim">
+      Everything runs in this page. Nothing is uploaded, and nothing leaves your
+      device after the page has loaded.
+    </p>
 
-    <div id="pick">
-      <label>File to send <input id="file" type="file" /></label>
-    </div>
+    <nav>
+      <button id="tab-send" class="tab active" type="button">Send</button>
+      <button id="tab-receive" class="tab" type="button">Receive</button>
+    </nav>
 
-    <!-- Shown only when the device has more than one camera. -->
-    <div id="camera-row" hidden>
-      <label
-        >Camera
-        <select id="camera"></select
-      ></label>
-    </div>
-
-    <section id="send" hidden>
-      <!-- The code comes first so it is on screen the moment a file is chosen. -->
-      <div class="shown">
-        <canvas id="code" hidden></canvas>
-        <div id="osd" class="osd"></div>
-      </div>
-      <p id="send-status"></p>
-      <p id="send-rate"></p>
-      <p id="tx-peer" class="dim"></p>
-      <div class="row">
-        <button id="pause" type="button" disabled>Pause</button>
-        <button id="reset-send" type="button">Reset</button>
-      </div>
-      <p id="send-error" class="error"></p>
-      <p class="dim">
-        Click the code to show it full screen. Keys: Space pauses and resumes.
-        Left and Right step one frame while paused. Up and Down change the speed
-        by 5 fps.
-      </p>
-      <p id="send-info" class="dim">Choose a file.</p>
+    <section id="send">
+      <label>File <input id="file" type="file" /></label>
       <div class="row">
         <label
           >Bytes per frame
@@ -63,14 +31,24 @@
           <select id="codes">
             <option value="1">1</option>
             <option value="2">2</option>
-            <option value="4">4</option>
+            <option value="4" selected>4</option>
           </select>
         </label>
         <label
-          >Frames per second (<span id="fps-range"></span>)
-          <input id="fps" type="number" min="1" max="60" value="30"
+          >Frames per second
+          <input id="fps" type="number" min="1" max="60" value="10"
         /></label>
       </div>
+      <p id="send-info" class="dim">Choose a file.</p>
+      <div class="shown">
+        <canvas id="code" hidden></canvas>
+        <div id="osd" class="osd"></div>
+      </div>
+      <p class="dim">
+        Click the code to show it full screen. Keys: Space pauses and resumes.
+        Left and Right step one frame while paused. Up and Down change the speed
+        by 5 fps.
+      </p>
       <div class="row">
         <label
           >Play again (start/count pairs, such as 120/30/300/6)
@@ -83,28 +61,26 @@
         /></label>
         <button id="replay-go" type="button" disabled>Replay</button>
       </div>
-      <p class="dim">
-        This camera watches the receiver's screen. The receiver then asks for
-        lost blocks by itself, and sending stops when it has the whole file.
-      </p>
-      <div class="video"><video id="tx-video" muted playsinline></video></div>
+      <p id="send-status"></p>
+      <p id="send-rate"></p>
+      <div class="row">
+        <button id="start" type="button" disabled>Start transfer</button>
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="reset-send" type="button" disabled>Reset</button>
+      </div>
+      <p id="send-error" class="error"></p>
     </section>
 
-    <section id="receive">
+    <section id="receive" hidden>
+      <button id="cam" type="button">Start camera</button>
+      <button id="reset" type="button">Reset</button>
       <div class="video"><video id="video" muted playsinline></video></div>
       <p id="rx-status">Camera is off.</p>
       <p id="rx-rate"></p>
       <pre id="rx-stats" class="dim"></pre>
       <pre id="rx-info"></pre>
       <p id="rx-gaps"></p>
-      <div id="ack-wrap" hidden>
-        <p class="dim">
-          Show this code to the sender's camera. It reports what is missing.
-        </p>
-        <canvas id="ack"></canvas>
-      </div>
       <button id="download" type="button" hidden>Download</button>
-      <button id="reset" type="button">Reset</button>
       <p id="rx-error" class="error"></p>
     </section>
 

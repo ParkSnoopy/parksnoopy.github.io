@@ -9,7 +9,7 @@ import {
   parseAck,
   parseFin,
   parseMeta,
-} from "../static/tools/qr-share/app/fin.js";
+} from "../static/tools/qr-share-twoway/app/fin.js";
 
 const sample = {
   sessionId: 9001,

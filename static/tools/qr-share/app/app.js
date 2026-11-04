@@ -29,13 +29,8 @@ import {
 import {
   findGaps,
   formatRanges,
-  ACK_MAX_RUNS,
-  packAck,
   packFin,
-  packMeta,
-  parseAck,
   parseFin,
-  parseMeta,
   parseRanges,
   rangeFrames,
 } from "./fin.js";
@@ -61,107 +56,32 @@ async function keepAwake() {
   }
 }
 
-// ---------- role ----------
-//
-// There is no switch between sending and receiving. A page that is given a file is a
-// sender. A page that reads a code from another device is a receiver. Until one of those
-// happens it is idle: camera on, nothing on screen, waiting.
+// ---------- tabs ----------
 
-let mode = "idle"; // "idle" | "send" | "receive"
-function setMode(next) {
-  mode = next;
-  $("send").hidden = next !== "send";
-  $("receive").hidden = next === "send";
-  $("pick").hidden = next === "receive";
-  // The notes give way once there is a code to look at.
-  $("intro").hidden = next !== "idle";
-}
-
-// ---------- camera choice ----------
-//
-// "Automatic" asks for the back camera when receiving and the front camera when sending.
-// With more than one camera on the device a list appears, and a pick there names the exact
-// device. The pick is dropped when the page changes role, because the camera that suits
-// one role is rarely the one that suits the other.
-
-let cameraId = ""; // "" means automatic
-const cameraSelect = $("camera");
-
-const pickCamera = (facing) =>
-  cameraId ? { deviceId: { exact: cameraId } } : { facingMode: facing };
-
-function activeCameraLabel() {
-  const track = (stream ?? txStream)?.getVideoTracks()[0];
-  return track?.label || "";
-}
-
-async function refreshCameras() {
-  let devices = [];
-  try {
-    devices = (await navigator.mediaDevices.enumerateDevices()).filter(
-      (d) => d.kind === "videoinput",
-    );
-  } catch {
-    // No device list here. Automatic still works.
-  }
-  if (cameraId && !devices.some((d) => d.deviceId === cameraId)) cameraId = "";
-  const inUse = activeCameraLabel();
-  cameraSelect.replaceChildren(
-    new Option(inUse ? `Automatic (${inUse})` : "Automatic", ""),
-    ...devices.map(
-      (d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId),
-    ),
-  );
-  cameraSelect.value = cameraId;
-  $("camera-row").hidden = devices.length < 2;
-}
-
-// A device that was chosen and has since gone away must not keep failing.
-function forgetBadCamera(e) {
-  if (
-    cameraId &&
-    (e.name === "OverconstrainedError" || e.name === "NotFoundError")
-  ) {
-    cameraId = "";
-    refreshCameras();
+function showTab(name) {
+  for (const t of ["send", "receive"]) {
+    $(t).hidden = t !== name;
+    $(`tab-${t}`).classList.toggle("active", t === name);
   }
 }
-
-function forgetCameraChoice() {
-  cameraId = "";
-  refreshCameras();
-}
-
-cameraSelect.onchange = () => {
-  cameraId = cameraSelect.value;
-  if (mode === "send") {
-    stopTxCamera();
-    startTxCamera();
-  } else if (stream || !result) {
-    // Same stream and decoder, new camera. A finished receiver keeps its camera off.
-    captureGen++;
-    stopCamera();
-    startReceiverCamera();
-  }
-};
-navigator.mediaDevices?.addEventListener?.("devicechange", refreshCameras);
+$("tab-send").onclick = () => showTab("send");
+$("tab-receive").onclick = () => showTab("receive");
 
 // ---------- sender ----------
 
 // A smaller frame is a smaller QR code, so every cell is larger on screen and easier for a
 // phone camera to tell apart. The default keeps cells large and still fills a code well.
 const FRAME_BYTES = [500, 1000, 1465, 1850, 2331, 2953];
-const DEFAULT_FRAME_BYTES = 1465;
+const DEFAULT_FRAME_BYTES = 2331;
 for (const n of FRAME_BYTES) {
   const option = new Option(`${n} B`, n);
   option.selected = n === DEFAULT_FRAME_BYTES;
   $("bytes").append(option);
 }
 
-const FPS = { min: 1, max: 60, fallback: 30 };
+const FPS = { min: 1, max: 60, fallback: 10 };
 $("fps").min = FPS.min;
 $("fps").max = FPS.max;
-$("fps-range").textContent = `${FPS.min} to ${FPS.max}`;
 // The lower bound is enforced on change, so a number can still be typed digit by digit.
 $("fps").addEventListener("input", () => {
   if (Number.parseInt($("fps").value, 10) > FPS.max) $("fps").value = FPS.max;
@@ -170,8 +90,6 @@ const fps = () =>
   clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
 
 const FIN_HOLD_MS = 1000;
-const REPLAY_RETRY_MS = 3000; // a replayed block still missing after this is asked for again
-const PEER_STALE_MS = 4000; // no ACK for this long and the link counts as lost
 const LOOKAHEAD = 3; // codes made ahead per grid cell, so a flip never waits for the QR maths
 const canvas = $("code");
 const staging = document.createElement("canvas");
@@ -187,18 +105,14 @@ function fail(message) {
 }
 
 function setIdle(idle) {
-  $("pause").disabled = idle;
+  $("start").disabled = !idle || !packed;
+  $("pause").disabled = $("reset-send").disabled = idle;
   $("replay").disabled = $("replay-go").disabled = idle;
 }
-
-// The last ACK code the sender's camera read from the receiver's screen.
-let peer = null; // { seq, solved, k, missing, at }
-const linkAlive = () => !!peer && performance.now() - peer.at < PEER_STALE_MS;
 
 function stopRun() {
   generation++;
   live = null;
-  peer = null;
   paused = false;
   $("pause").textContent = "Pause";
   $("send-rate").textContent = "";
@@ -206,43 +120,17 @@ function stopRun() {
   setIdle(true);
 }
 
-// Opening a file makes this page a sender. The receiver's camera gives way to the
-// sender's, which watches the other screen instead.
-function enterSend() {
-  if (mode === "send") return;
-  captureGen++;
-  stopCamera();
-  forgetCameraChoice();
-  setMode("send");
-}
-
-// Back to waiting: no file, no stream, receiver camera on again.
-function leaveSend() {
-  stopRun();
-  packing++;
-  stopTxCamera();
-  packed = null;
-  $("file").value = "";
-  $("send-info").textContent = "Choose a file.";
-  $("send-status").textContent = "";
-  fail("");
-  forgetCameraChoice();
-  setMode("idle");
-  startReceiverCamera();
-}
-
 async function prepare() {
   const file = $("file").files[0];
-  if (!file) {
-    leaveSend();
-    return;
-  }
-  enterSend();
   stopRun();
   packed = null;
   setIdle(true);
   fail("");
   $("send-status").textContent = "";
+  if (!file) {
+    $("send-info").textContent = "Choose a file.";
+    return;
+  }
   const id = ++packing;
   $("send-info").textContent = "Compressing...";
   try {
@@ -259,7 +147,6 @@ async function prepare() {
   }
   updateInfo();
   setIdle(true);
-  arm();
 }
 
 function updateInfo() {
@@ -274,11 +161,8 @@ function updateInfo() {
     `${packed.name}: ${sent}. Each frame carries ${blockLen} B of file data.`;
 }
 
-// With `wait` set the stream is built but held back. The screen shows the META code, which
-// names the file, until a receiver answers with an ACK code for this session.
-function startStream(wait = false) {
+function startStream() {
   const gen = ++generation;
-  let waiting = wait;
   const frameBytes = Number($("bytes").value);
   const codes = Number($("codes").value);
   const { cols, rows } = gridDims(codes);
@@ -341,43 +225,20 @@ function startStream(wait = false) {
     ),
   });
 
-  // The same size as every other code, so the grid does not change shape when it starts.
-  const makeMeta = () => ({
-    n: -1,
-    fin: true,
-    img: toImage(
-      createFrameQr(
-        packMeta({
-          sessionId,
-          k: encoder.k,
-          blockLen,
-          size: packed.size,
-          name: packed.name,
-        }),
-        "L",
-        version,
-      ),
-    ),
-  });
-
   const makeCell = () => {
     let n;
     let replayed = false;
-    // With a live ACK link nobody needs a FIN code, and the stream never stops for one.
-    const linked = linkAlive();
     if (replay.length) {
       n = replay.shift();
       replayed = true;
-      replayedAt.set(n, performance.now());
-      finNext = replay.length === 0 && !linked;
-    } else if (finNext && !linked) {
+      finNext = replay.length === 0;
+    } else if (finNext) {
       finNext = false;
       return makeFin();
-    } else if (seq % cycle === encoder.k && finAt !== seq && !linked) {
+    } else if (seq % cycle === encoder.k && finAt !== seq) {
       finAt = seq;
       return makeFin();
     } else {
-      finNext = false;
       n = seq++;
     }
     const bytes = packFrame({ ...header, seq: n }, encoder.encode(n));
@@ -387,35 +248,14 @@ function startStream(wait = false) {
   };
 
   const playAgain = (frames) => {
-    // Frames made ahead of the screen go back to the counter. Replays that were already
-    // made ahead are kept, in front of the new ones, so no request is lost.
-    const ahead = queue.filter((q) => q.replayed).map((q) => q.n);
+    // Frames made ahead of the screen go back to the counter, then the replay goes first.
     seq -= queue.filter((q) => !q.replayed && !q.fin).length;
     if (queue.some((q) => q.fin)) finAt = -1;
     queue.length = 0;
-    const merged = [...new Set([...ahead, ...replay, ...frames])];
     replay.length = 0;
-    replay.push(...merged);
+    replay.push(...frames);
     finNext = false;
     pump(LOOKAHEAD * codes);
-  };
-
-  // The receiver's ACK code asks for blocks while the stream keeps running. A block that
-  // is already queued, or was replayed a moment ago and may still be on its way, is left
-  // alone. One that is still missing after that window is asked for again.
-  const replayedAt = new Map();
-  const onAck = (ack) => {
-    const now = performance.now();
-    const pending = new Set(replay);
-    for (const q of queue) if (q.replayed) pending.add(q.n);
-    const wanted = rangeFrames(ack.runs).filter(
-      (n) =>
-        n < encoder.k &&
-        !pending.has(n) &&
-        now - (replayedAt.get(n) ?? Number.NEGATIVE_INFINITY) > REPLAY_RETRY_MS,
-    );
-    if (wanted.length) playAgain(wanted);
-    return wanted.length;
   };
 
   // Fits the code to the space it has. The raster stays at a whole number of pixels per
@@ -513,10 +353,8 @@ function startStream(wait = false) {
     for (let i = 0; i < codes; i++) paint(i, item);
   };
   // Steps by one screen. A frame is one code, so a grid steps by as many frames as it shows.
-  const step = (direction) => {
-    if (waiting) return;
+  const step = (direction) =>
     show(direction > 0 ? lastSeq + 1 : lastSeq - 2 * codes + 1);
-  };
 
   live = {
     resize: sizeCanvas,
@@ -528,14 +366,7 @@ function startStream(wait = false) {
     position: () => lastSeq,
     replayLeft: () => replay.length,
     playAgain,
-    onAck,
-    sessionId,
-    waiting: () => waiting,
-    go: () => {
-      waiting = false;
-    },
   };
-  if (waiting) paintAll(makeMeta());
 
   // Each cell flips at its own phase of the frame interval. A camera exposure that spans a
   // flip then catches at most one code half changed, not all of them at once.
@@ -543,7 +374,7 @@ function startStream(wait = false) {
   const tick = (now) => {
     if (gen !== generation) return;
     requestAnimationFrame(tick);
-    if (paused || waiting) {
+    if (paused) {
       nextAt = now;
       return;
     }
@@ -579,16 +410,8 @@ function startStream(wait = false) {
 
 // The line shown over the code in full screen, and in the status line otherwise.
 function sendState() {
-  if (live.waiting())
-    return "Waiting for a receiver. Show this code to its camera and sending starts by itself.";
   const word = paused ? "Paused" : "Sending";
-  return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).${peerState()}`;
-}
-
-function peerState() {
-  if (!txStream) return "";
-  if (!linkAlive()) return " No status from the receiver yet.";
-  return ` Receiver has ${peer.solved} of ${peer.k} blocks, ${peer.missing} known missing.`;
+  return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).`;
 }
 
 let osdTimer = 0;
@@ -603,13 +426,9 @@ function showOsd() {
 
 setInterval(() => {
   if (!live) return;
-  if (live.waiting()) {
-    $("send-status").textContent = sendState();
-    return;
-  }
   const left = live.replayLeft();
   $("send-status").textContent =
-    `${sendState()}${left ? ` Replaying, ${left} frames to go.` : ""} The stream repeats until the receiver confirms it has the file.`;
+    `${sendState()}${left ? ` Replaying, ${left} frames to go.` : ""} The stream repeats until you press Reset.`;
   if (paused) return;
   const now = performance.now();
   while (live.flips.length && now - live.flips[0] > 1000) live.flips.shift();
@@ -627,35 +446,24 @@ canvas.onclick = () => {
 
 $("file").onchange = prepare;
 $("bytes").onchange = $("codes").onchange = () => {
-  const wasRunning = !!live;
   if (live) stopRun();
   updateInfo();
   $("send-status").textContent = "";
-  if (wasRunning) arm();
 };
 $("fps").onchange = () => {
   $("fps").value = fps();
 };
 
-// Puts the META code on screen and holds the stream back. There is no Start button: the
-// stream is released by the receiver's ACK code.
-function present() {
+$("start").onclick = () => {
   fail("");
-  if (!packed || live) return;
   paused = false;
-  if (!startStream(true)) return;
+  if (!startStream()) return;
   keepAwake();
-  $("send-rate").textContent = "";
+  $("send-rate").textContent = "Transfer rate: measuring...";
+  $("send-status").textContent =
+    "Sending. The stream repeats until you press Reset, so keep it up until the receiver says Done.";
   setIdle(false);
-}
-
-// With a file ready its META code goes up, so the other device can read it and become the
-// receiver. The sender's camera comes on too, to watch for the receiver's answer.
-function arm() {
-  if (!packed) return;
-  present();
-  startTxCamera();
-}
+};
 
 function setPaused(value) {
   paused = value;
@@ -698,141 +506,6 @@ document.addEventListener("keydown", (e) => {
 // A tapped button must not stay highlighted, and it must not keep the Space key.
 document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
 
-// ---------- the sender's camera ----------
-//
-// The sender watches the receiver's screen while it keeps sending. Nothing waits on it.
-// Frames go to a worker, the answer comes back whenever it comes, and a missing or late
-// answer changes nothing about what is on the screen.
-
-const TX_SCAN_MS = 150;
-const txVideo = $("tx-video");
-const txGrab = document.createElement("canvas");
-let txStream = null;
-let txGen = 0;
-let txId = 0;
-let txLastSeq = -1;
-let txActedAt = 0;
-const txPool = new DecodeWorkerPool(
-  () => new Worker(new URL("./rx-worker.js", import.meta.url)),
-  (bytes) => onAckFrame(bytes),
-  () => {},
-  () => {},
-);
-
-function onAckFrame(bytes) {
-  const ack = parseAck(bytes);
-  if (!ack) return;
-  if (!live || ack.sessionId !== live.sessionId || ack.k !== live.k) return;
-  // The receiver read the META code and answered. Release the stream.
-  if (live.waiting()) {
-    live.go();
-    $("send-rate").textContent = "Transfer rate: measuring...";
-  }
-  const now = performance.now();
-  // The same answer again proves the link is up. It is only acted on again after the
-  // retry window, so a replay that was lost again gets asked for once more.
-  if (
-    ack.seq === txLastSeq &&
-    linkAlive() &&
-    now - txActedAt < REPLAY_RETRY_MS
-  ) {
-    peer.at = now;
-    return;
-  }
-  txLastSeq = ack.seq;
-  txActedAt = now;
-  const missing = ack.runs.reduce((sum, r) => sum + r.count, 0);
-  peer = { seq: ack.seq, solved: ack.solved, k: ack.k, missing, at: now };
-  if (ack.done) {
-    finishSend();
-    return;
-  }
-  const asked = live.onAck(ack);
-  if (asked)
-    $("tx-peer").textContent = `Receiver asked for ${asked} blocks again.`;
-}
-
-function finishSend() {
-  stopRun();
-  stopTxCamera();
-  if (document.fullscreenElement) document.exitFullscreen();
-  $("send-status").textContent =
-    "The receiver confirmed it has the whole file. Sending stopped.";
-}
-
-function txScan(gen) {
-  if (gen !== txGen) return;
-  const vw = txVideo.videoWidth;
-  const vh = txVideo.videoHeight;
-  if (vw && vh && txPool.busyCount < txPool.size) {
-    if (txGrab.width !== vw || txGrab.height !== vh) {
-      txGrab.width = vw;
-      txGrab.height = vh;
-    }
-    const ctx = txGrab.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(txVideo, 0, 0);
-    const img = ctx.getImageData(0, 0, vw, vh);
-    txPool.submit(
-      {
-        id: txId++,
-        buf: img.data.buffer,
-        w: vw,
-        h: vh,
-        ox: 0,
-        oy: 0,
-        full: true,
-      },
-      [img.data.buffer],
-    );
-  }
-  setTimeout(() => txScan(gen), TX_SCAN_MS);
-}
-
-function stopTxCamera() {
-  txGen++;
-  for (const t of txStream?.getTracks() ?? []) t.stop();
-  txStream = null;
-  txVideo.srcObject = null;
-  txPool.resize(0);
-  txLastSeq = -1;
-  $("tx-peer").textContent = "";
-}
-
-let txStarting = false;
-async function startTxCamera() {
-  fail("");
-  if (txStream || txStarting) return;
-  const blocked = insecureMessage();
-  if (blocked) {
-    fail(blocked);
-    return;
-  }
-  txStarting = true;
-  try {
-    txStream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        ...pickCamera("user"),
-        width: { ideal: 960 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 15 },
-      },
-    });
-    txVideo.srcObject = txStream;
-    await txVideo.play();
-  } catch (e) {
-    stopTxCamera();
-    forgetBadCamera(e);
-    fail(cameraError(e));
-    return;
-  } finally {
-    txStarting = false;
-  }
-  txPool.resize(1);
-  refreshCameras();
-  txScan(++txGen);
-}
-
 // Only digits and "/" can be typed, so a stray letter never reaches the parser.
 $("replay").addEventListener("input", () => {
   $("replay").value = $("replay").value.replace(/[^\d/]/g, "");
@@ -855,7 +528,11 @@ $("replay").addEventListener("keydown", (e) => {
   if (e.key === "Enter") replayNow();
 });
 
-$("reset-send").onclick = leaveSend;
+$("reset-send").onclick = () => {
+  stopRun();
+  $("send-status").textContent = "Stopped. Press Start transfer to send again.";
+  updateInfo();
+};
 
 // ---------- receiver ----------
 //
@@ -895,8 +572,6 @@ let expectedAt = 0;
 let frameId = 0;
 let verdict = "";
 let finSeen = false; // a FIN code of this stream was read, so the missing runs are shown
-let high = -1; // the highest block number read so far, which bounds what can be missing
-let incoming = null; // the META code read before any data: { sessionId, k, blockLen, size, name }
 const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
 let shown = { ...stats };
 let rateWindow = []; // [time, payload bytes] for every useful frame
@@ -1041,17 +716,6 @@ function onDecoded(bytes, box, info) {
   stats.decoded++;
   if (info?.tracked) stats.tracked++;
   if (box) noteRegion(box, performance.now(), true, info);
-  const meta = parseMeta(bytes);
-  if (meta) {
-    // A sender is showing the name of its file. Reading this makes the page a receiver,
-    // and the ACK code it then shows is what releases the stream.
-    if (mode === "idle") setMode("receive");
-    if (!decoder) {
-      incoming = meta;
-      requestRender();
-    }
-    return;
-  }
   const fin = parseFin(bytes);
   if (fin) {
     // The sender finished a sweep. Only the stream being received counts.
@@ -1077,8 +741,6 @@ function onDecoded(bytes, box, info) {
   }
   const { header, block } = parsed;
   const key = streamIdentity(header);
-  // The first stream code read makes this page a receiver.
-  if (mode === "idle") setMode("receive");
   if (!decoder || key !== streamKey) {
     decoder = new LTDecoder(
       header.k,
@@ -1087,13 +749,10 @@ function onDecoded(bytes, box, info) {
       header.totalLen,
     );
     streamKey = key;
-    incoming = null;
     finSeen = false;
-    high = -1;
     startedAt = performance.now();
     rateWindow = [];
   }
-  if (header.seq < header.k) high = Math.max(high, header.seq);
   const before = decoder.framesNew - decoder.framesRedundant;
   decoder.addFrame(header.seq, block);
   if (decoder.framesNew - decoder.framesRedundant > before)
@@ -1143,7 +802,7 @@ function stopCamera() {
 // 60 fps with 30. The retry takes whatever the camera can give.
 async function acquireCamera() {
   const base = {
-    ...pickCamera("environment"),
+    facingMode: "environment",
     width: { ideal: 1280 },
     height: { ideal: 960 },
   };
@@ -1161,16 +820,11 @@ async function acquireCamera() {
   }
 }
 
-function insecureMessage() {
-  if (window.isSecureContext && navigator.mediaDevices?.getUserMedia) return "";
-  return `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
-}
-
 function cameraError(e) {
   switch (e.name) {
     case "NotAllowedError":
     case "SecurityError":
-      return "Camera permission is denied. Allow the camera for this site in the browser or system settings, then reload this page.";
+      return "Camera permission is denied. Allow the camera for this site in the browser or system settings, then press Start camera again.";
     case "NotFoundError":
     case "OverconstrainedError":
       return "No camera was found on this device.";
@@ -1181,44 +835,32 @@ function cameraError(e) {
   }
 }
 
-let cameraStarting = false;
-async function startReceiverCamera() {
+$("cam").onclick = async () => {
   $("rx-error").textContent = "";
-  if (stream || cameraStarting || mode === "send") return;
-  const blocked = insecureMessage();
-  if (blocked) {
-    $("rx-error").textContent = blocked;
+  if (stream) return;
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    $("rx-error").textContent =
+      `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
     return;
   }
-  cameraStarting = true;
   try {
     stream = await acquireCamera();
     video.srcObject = stream;
     await video.play();
   } catch (e) {
     stopCamera();
-    forgetBadCamera(e);
     $("rx-error").textContent = cameraError(e);
-    return;
-  } finally {
-    cameraStarting = false;
-  }
-  if (mode === "send") {
-    // A file was opened while the camera was still starting.
-    stopCamera();
     return;
   }
   done = false;
   pool.resize(WORKERS);
-  refreshCameras(); // device names appear only after permission is granted
   keepAwake();
   captureGen++;
   schedule(captureGen);
   render();
-}
+};
 
 $("reset").onclick = () => {
-  setMode("idle");
   captureGen++;
   decoder = null;
   streamKey = "";
@@ -1227,17 +869,12 @@ $("reset").onclick = () => {
   rateWindow = [];
   verdict = "";
   finSeen = false;
-  high = -1;
-  incoming = null;
-  ackKey = "";
   startedAt = 0;
   $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
   if (stream) {
     done = false;
     schedule(captureGen);
-  } else {
-    startReceiverCamera(); // the camera went off when the last file finished
   }
   render();
 };
@@ -1275,76 +912,6 @@ setInterval(() => {
   if (decoder && !result) render();
 }, 1000);
 
-// ---------- the receiver's ACK code ----------
-//
-// The receiver keeps a small QR code on its own screen for the sender's camera. It is
-// redrawn on a timer of its own, so decoding never waits for it and it never waits for
-// decoding. It names the runs of blocks missing below the highest block seen, which are
-// blocks the sender has already shown once.
-
-const ACK_EVERY_MS = 250;
-const ACK_WIDTH_PX = 300;
-let ackSeq = 0;
-let ackKey = "";
-
-function updateAck() {
-  const wrap = $("ack-wrap");
-  let key;
-  let make;
-  if (decoder) {
-    const finished = !!result;
-    const gaps = finished ? [] : findGaps(decoder.solved.slice(0, high + 1));
-    const runs = gaps.slice(0, ACK_MAX_RUNS);
-    const solved = finished ? decoder.k : decoder.solvedCount;
-    key = `${decoder.sessionId}|${solved}|${finished}|${runs.map((r) => `${r.start}/${r.count}`)}`;
-    make = (seq) =>
-      packAck({
-        sessionId: decoder.sessionId,
-        k: decoder.k,
-        seq,
-        solved,
-        done: finished,
-        runs,
-      });
-  } else if (incoming) {
-    // The META code was read and no data yet. This answer is what starts the sender.
-    key = `meta|${incoming.sessionId}`;
-    make = (seq) =>
-      packAck({
-        sessionId: incoming.sessionId,
-        k: incoming.k,
-        seq,
-        solved: 0,
-        done: false,
-        runs: [],
-      });
-  } else {
-    wrap.hidden = true;
-    ackKey = "";
-    return;
-  }
-  if (key === ackKey) return;
-  ackKey = key;
-  ackSeq = (ackSeq + 1) & 0xffff;
-  const qr = createFrameQr(make(ackSeq), "L", undefined);
-  const raster = rasterizeQr(qr.modules.size, qr.modules.data, MARGIN);
-  const cv = $("ack");
-  cv.width = cv.height = raster.size;
-  cv.getContext("2d").putImageData(
-    new ImageData(
-      new Uint8ClampedArray(raster.pixels.buffer),
-      raster.size,
-      raster.size,
-    ),
-    0,
-    0,
-  );
-  const px = raster.size * Math.max(1, Math.floor(ACK_WIDTH_PX / raster.size));
-  cv.style.width = cv.style.height = `${px}px`;
-  wrap.hidden = false;
-}
-setInterval(updateAck, ACK_EVERY_MS);
-
 let renderTimer = 0;
 // Redraw at most ten times a second, whatever the frame rate is.
 function requestRender() {
@@ -1359,11 +926,7 @@ function render() {
   let status = "Camera is off.";
   if (result) status = "Done. The file is rebuilt and its SHA-256 matches.";
   else if (decoder) status = "Receiving...";
-  else if (incoming)
-    status = "Found a sender. Waiting for it to start. Keep it in view.";
-  else if (stream)
-    status =
-      "Waiting. Point the camera at the other device's screen, or open a file to send.";
+  else if (stream) status = "Point the camera at the code on the sender.";
   $("rx-status").textContent = status;
 
   if (result) {
@@ -1382,9 +945,6 @@ function render() {
     );
     $("rx-info").textContent =
       `Progress: ${Math.floor(estimate.fraction * 100)}%\nBlocks solved: ${decoder.solvedCount} of ${decoder.k}\nFrames used: ${useful}`;
-  } else if (incoming) {
-    $("rx-info").textContent =
-      `File: ${incoming.name}\nSize: ${fmtBytes(incoming.size)}`;
   } else {
     $("rx-info").textContent = "";
   }
@@ -1401,6 +961,3 @@ function render() {
   $("download").hidden = !result;
   if (result) $("download").textContent = `Download ${result.file.name}`;
 }
-
-// The page starts out waiting, with the camera on.
-startReceiverCamera();

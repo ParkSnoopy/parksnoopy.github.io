@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QR file share TwoWay</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <p><a href="../">&lt; back to the tool page</a></p>
+    <h1>QR file share TwoWay</h1>
+    <div id="intro">
+      <p class="dim">
+        Everything runs in this page. Nothing is uploaded, and nothing leaves
+        your device after the page has loaded.
+      </p>
+      <p class="dim">
+        Open a file to send it. It shows a code that names the file. Otherwise
+        this page waits with its camera on and becomes the receiver as soon as
+        it reads such a code. The receiver's answer starts the sender.
+      </p>
+    </div>
+
+    <div id="pick">
+      <label>File to send <input id="file" type="file" /></label>
+    </div>
+
+    <!-- Shown only when the device has more than one camera. -->
+    <div id="camera-row" hidden>
+      <label
+        >Camera
+        <select id="camera"></select
+      ></label>
+    </div>
+
+    <section id="send" hidden>
+      <!-- The code comes first so it is on screen the moment a file is chosen. -->
+      <div class="shown">
+        <canvas id="code" hidden></canvas>
+        <div id="osd" class="osd"></div>
+      </div>
+      <p id="send-status"></p>
+      <p id="send-rate"></p>
+      <p id="tx-peer" class="dim"></p>
+      <div class="row">
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="reset-send" type="button">Reset</button>
+      </div>
+      <p id="send-error" class="error"></p>
+      <p class="dim">
+        Click the code to show it full screen. Keys: Space pauses and resumes.
+        Left and Right step one frame while paused. Up and Down change the speed
+        by 5 fps.
+      </p>
+      <p id="send-info" class="dim">Choose a file.</p>
+      <div class="row">
+        <label
+          >Bytes per frame
+          <select id="bytes"></select>
+        </label>
+        <label
+          >Codes on screen
+          <select id="codes">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        <label
+          >Frames per second (<span id="fps-range"></span>)
+          <input id="fps" type="number" min="1" max="60" value="30"
+        /></label>
+      </div>
+      <div class="row">
+        <label
+          >Play again (start/count pairs, such as 120/30/300/6)
+          <input
+            id="replay"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            disabled
+        /></label>
+        <button id="replay-go" type="button" disabled>Replay</button>
+      </div>
+      <p class="dim">
+        This camera watches the receiver's screen. The receiver then asks for
+        lost blocks by itself, and sending stops when it has the whole file.
+      </p>
+      <div class="video"><video id="tx-video" muted playsinline></video></div>
+    </section>
+
+    <section id="receive">
+      <div class="video"><video id="video" muted playsinline></video></div>
+      <p id="rx-status">Camera is off.</p>
+      <p id="rx-rate"></p>
+      <pre id="rx-stats" class="dim"></pre>
+      <pre id="rx-info"></pre>
+      <p id="rx-gaps"></p>
+      <div id="ack-wrap" hidden>
+        <p class="dim">
+          Show this code to the sender's camera. It reports what is missing.
+        </p>
+        <canvas id="ack"></canvas>
+      </div>
+      <button id="download" type="button" hidden>Download</button>
+      <button id="reset" type="button">Reset</button>
+      <p id="rx-error" class="error"></p>
+    </section>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
