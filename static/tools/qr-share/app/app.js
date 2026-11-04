@@ -4,29 +4,6 @@
 // Text that comes from a code is written with textContent, never innerHTML.
 
 import {
-  LTDecoder,
-  LTEncoder,
-  DecodeWorkerPool,
-  QUIET_ZONE_MODULES as MARGIN,
-  blockLength,
-  classifyFrame,
-  createFrameQr,
-  cycleLength,
-  estimateTransferProgress,
-  fitsInOneStream,
-  fnv1a,
-  frameVerdictMessage,
-  gridDims,
-  minimumFrameBytes,
-  packFile,
-  packFrame,
-  parseFrame,
-  rasterizeQr,
-  streamIdentity,
-  unpackFile,
-  verifyFile,
-} from "./vendor/decimen-core.js";
-import {
   findGaps,
   formatRanges,
   packFin,
@@ -36,6 +13,29 @@ import {
   parseRanges,
   rangeFrames,
 } from "./fin.js";
+import {
+  blockLength,
+  classifyFrame,
+  createFrameQr,
+  cycleLength,
+  DecodeWorkerPool,
+  estimateTransferProgress,
+  fitsInOneStream,
+  fnv1a,
+  frameVerdictMessage,
+  gridDims,
+  LTDecoder,
+  LTEncoder,
+  QUIET_ZONE_MODULES as MARGIN,
+  minimumFrameBytes,
+  packFile,
+  packFrame,
+  parseFrame,
+  rasterizeQr,
+  streamIdentity,
+  unpackFile,
+  verifyFile,
+} from "./vendor/decimen-core.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
@@ -134,6 +134,8 @@ async function prepare() {
     $("send-info").textContent = "Choose a file.";
     return;
   }
+  // The file input keeps focus after a pick and would take the Space key that starts the send.
+  $("file").blur();
   const id = ++packing;
   $("send-info").textContent = "Compressing...";
   try {
@@ -226,7 +228,7 @@ function showPreview() {
   draw();
   preview = { resize: draw };
   $("send-status").textContent =
-    "This code names the file. Aim the receiver's camera at it, then press Start transfer.";
+    "This code names the file. Aim the receiver's camera at it, then press Space or Start transfer.";
 }
 
 function startStream() {
@@ -564,6 +566,15 @@ document.addEventListener("keydown", (e) => {
 
 // A tapped button must not stay highlighted, and it must not keep the Space key.
 document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
+
+// While the META code is on screen, Space starts the transfer, as the Start button does.
+document.addEventListener("keydown", (e) => {
+  if (live || !preview || $("send").hidden || e.key !== " ") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.("input, select, textarea, button")) return;
+  e.preventDefault();
+  $("start").click();
+});
 
 // Only digits and "/" can be typed, so a stray letter never reaches the parser.
 $("replay").addEventListener("input", () => {
@@ -1129,6 +1140,9 @@ function render() {
   } else {
     $("rx-gaps").textContent = "";
   }
+  // Once a sender is found, the receiver becomes a popper that fills the screen, so the
+  // picture, the progress and the buttons are all in view without scrolling. Reset closes it.
+  $("receive").classList.toggle("popper", !!(incoming || decoder || result));
   $("download").hidden = !result;
   if (result) $("download").textContent = `Download ${result.file.name}`;
 }

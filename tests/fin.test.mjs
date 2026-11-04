@@ -12,11 +12,11 @@ import {
   rangeFrames,
 } from "../static/tools/qr-share/app/fin.js";
 import {
-  LTDecoder,
-  LTEncoder,
   blockLength,
   classifyFrame,
   cycleLength,
+  LTDecoder,
+  LTEncoder,
   packFrame,
 } from "../static/tools/qr-share/app/vendor/decimen-core.js";
 

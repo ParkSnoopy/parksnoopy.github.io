@@ -18,7 +18,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font:
-    16px/1.54 "Fira Code",
+    16px / 1.54 "Fira Code",
     "JetBrains Mono",
     Consolas,
     monospace;
@@ -177,4 +177,41 @@ pre {
   color: var(--accent);
   border: 1px dashed var(--accent);
   padding: 0.5rem;
+}
+/* The receiver, once it has found a sender, is one screen tall: the picture takes what the
+   other parts leave, and nothing scrolls. These rules come last so they win over the plain
+   ones above. */
+#receive.popper {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0.5rem;
+  overflow: hidden;
+  background: var(--bg);
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+#receive.popper[hidden] {
+  display: none;
+}
+#receive.popper .video {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+}
+#receive.popper video {
+  height: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+#receive.popper p,
+#receive.popper pre,
+#receive.popper label {
+  margin: 0;
+  overflow: hidden;
 }
