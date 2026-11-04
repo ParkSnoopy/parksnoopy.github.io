@@ -2,7 +2,7 @@
 title: "Home"
 ---
 
-Hi, I am ParkSnoopy. 안녕하세요.
+Hi, I am ParkSnoopy.
 
 I write small tools, mostly in Rust and Go, and I run them myself.
 This site holds my [portfolio](/portfolio/), a few [posts](/posts/), and some static [tools](/tools/).

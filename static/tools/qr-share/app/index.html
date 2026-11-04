@@ -20,40 +20,26 @@
     </nav>
 
     <section id="send">
-      <label>File <input id="file" type="file" /></label>
+      <label>File <input id="file" type="file" disabled /></label>
       <div class="row">
         <label
-          >Code size
-          <select id="grid"></select>
+          >Code mode
+          <select id="mode" disabled></select>
         </label>
         <label
           >Frames per second (<span id="fps-range"></span>)
           <input id="fps" type="number" min="1" max="60" value="30"
         /></label>
       </div>
-      <p id="send-info" class="dim">
-        Choose a file. The first code holds its metadata.
-      </p>
+      <p id="send-info" class="dim">Loading the encoder...</p>
       <div class="shown"><canvas id="code"></canvas></div>
       <p class="dim">Click the code to show it full screen.</p>
       <p id="send-status"></p>
+      <p id="send-rate"></p>
       <div class="row">
         <button id="start" type="button" disabled>Start transfer</button>
         <button id="pause" type="button" disabled>Pause</button>
         <button id="reset-send" type="button" disabled>Reset</button>
-      </div>
-      <div class="row">
-        <label
-          >Missing numbers from the receiver
-          <input
-            id="missing-in"
-            type="text"
-            placeholder="3/4/5/9"
-            autocomplete="off"
-        /></label>
-        <button id="replay" type="button" disabled>
-          Replay missing frames
-        </button>
       </div>
       <p id="send-error" class="error"></p>
     </section>
@@ -63,18 +49,9 @@
       <button id="reset" type="button">Reset</button>
       <div class="video"><video id="video" muted playsinline></video></div>
       <p id="rx-status">Camera is off.</p>
+      <p id="rx-rate"></p>
       <pre id="rx-stats" class="dim"></pre>
       <pre id="rx-info"></pre>
-      <div id="missing-box" hidden>
-        <p>
-          Some frames are missing or damaged. Type these numbers into the
-          sender:
-        </p>
-        <pre id="missing-out" class="code"></pre>
-      </div>
-      <button id="show-missing" type="button" hidden>
-        Show missing numbers
-      </button>
       <button id="download" type="button" hidden>Download</button>
       <p id="rx-error" class="error"></p>
     </section>

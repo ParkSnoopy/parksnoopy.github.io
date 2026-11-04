@@ -1,24 +1,19 @@
 // UI glue for the color code file transfer tool. All data stays in page memory.
+// The codec is libcimbar (WASM). The encoder runs in tx-worker.js, the camera decoder in
+// rx-worker.js, and the fountain decoder in sink-worker.js. This page only wires them up.
 // All text that comes from a code is written with textContent, never innerHTML.
-import { encodeCells, renderRGBA } from "./codec.js";
-import {
-  GRIDS,
-  Receiver,
-  loadZstd,
-  parseMissing,
-  payloadSize,
-  prepareTransfer,
-} from "./protocol.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
   Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : fallback));
 
-// Fetch zstd.wasm now, so no request is needed while a transfer runs.
-loadZstd().catch(() => {});
-
-// A pressed button must not stay highlighted. This also covers Pause and Reset.
-document.addEventListener("click", (e) => e.target.closest("button")?.blur());
+const fmtBytes = (n) =>
+  n < 1000
+    ? `${Math.round(n)} B`
+    : n < 1e6
+      ? `${(n / 1e3).toFixed(1)} KB`
+      : `${(n / 1e6).toFixed(2)} MB`;
+const fmtRate = (bytesPerSecond) => `${fmtBytes(bytesPerSecond)}/s`;
 
 // ---------- tabs ----------
 
@@ -33,17 +28,8 @@ $("tab-receive").onclick = () => showTab("receive");
 
 // ---------- sender ----------
 
-let transfer = null;
-let prepId = 0;
-
-const DEFAULT_GRID = 64;
-for (const g of GRIDS) {
-  const option = document.createElement("option");
-  option.value = g;
-  option.textContent = `${g} x ${g} cells, ${payloadSize(g)} B per frame`;
-  $("grid").append(option);
-}
-$("grid").value = DEFAULT_GRID;
+const MODE_NAMES = { 68: "B", 66: "Bu", 67: "Bm", 4: "4C" };
+const DEFAULT_MODE = 68;
 
 const FPS = { min: 1, max: 60, fallback: 30 };
 $("fps").min = FPS.min;
@@ -59,217 +45,270 @@ $("fps").addEventListener("input", () => {
 const fps = () =>
   clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
 
-function drawFrame(frame) {
-  const G = transfer.meta.grid;
-  const px = Math.max(3, Math.floor(720 / (G + 8)));
-  const img = renderRGBA(encodeCells(frame, G), G, px);
-  const canvas = $("code");
-  if (canvas.width !== img.width) canvas.width = canvas.height = img.width;
-  canvas
-    .getContext("2d")
-    .putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
-}
-
-$("code").onclick = () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else $("code").requestFullscreen?.();
-};
+let tx = null;
+let payload = 0; // bytes of code data per frame in the current mode
+let encoded = false;
+let paused = false;
+let sendStart = 0;
 
 function updateInfo() {
-  if (!transfer) return;
-  const { name, size, packed, count } = transfer.meta;
-  $("send-info").textContent =
-    `${name}: ${size} B, ${packed} B compressed, ${count} frames, about ${Math.ceil(count / fps())} s at ${fps()} frames per second.`;
-}
-
-async function prepare() {
   const file = $("file").files[0];
-  if (!file) return;
-  const id = ++prepId;
-  stopRun();
-  $("send-error").textContent = "";
-  $("start").disabled = $("replay").disabled = true;
-  $("send-info").textContent = "Compressing...";
-  try {
-    const data = new Uint8Array(await file.arrayBuffer());
-    const next = await prepareTransfer(
-      file.name,
-      data,
-      Number($("grid").value),
-    );
-    if (id !== prepId) return;
-    transfer = next;
-    drawFrame(transfer.frames[0]);
-    updateInfo();
-    $("send-status").textContent =
-      "Show this metadata code to the receiver. Press Start when the receiver is ready.";
-    $("start").disabled = $("replay").disabled = false;
-  } catch (e) {
-    if (id === prepId) $("send-error").textContent = e.message;
-  }
+  if (!file || !payload) return;
+  $("send-info").textContent =
+    `${file.name}: ${fmtBytes(file.size)}. Each frame carries ${payload} B of code data.`;
 }
-
-// The running pass: { indexes, k, due } while frames play, null otherwise.
-let run = null;
-let paused = false;
-let raf = 0;
 
 function setIdle(idle) {
-  $("start").disabled = $("replay").disabled = !idle;
+  $("start").disabled = !idle || !encoded;
   $("pause").disabled = $("reset-send").disabled = idle;
 }
 
 function stopRun() {
-  cancelAnimationFrame(raf);
-  raf = 0;
-  run = null;
+  tx?.postMessage({ type: "stop" });
   paused = false;
   $("pause").textContent = "Pause";
-  $("pause").disabled = $("reset-send").disabled = true;
+  $("send-rate").textContent = "";
+  setIdle(true);
 }
 
-// Returns false when the pass is over.
-function showNext() {
-  const { indexes, k } = run;
-  if (k >= indexes.length) {
-    stopRun();
-    drawFrame(transfer.frames[0]); // back to metadata: this tells the receiver the pass is over
-    $("send-status").textContent =
-      "Pass finished. If the receiver shows missing numbers, enter them below.";
-    setIdle(true);
-    return false;
+function startSender() {
+  if (!$("code").transferControlToOffscreen) {
+    $("send-info").textContent = "";
+    $("send-error").textContent =
+      "This browser has no OffscreenCanvas, so the sender cannot run. Use a current Chrome, Firefox or Safari.";
+    return;
   }
-  drawFrame(transfer.frames[indexes[k]]);
-  $("send-status").textContent =
-    `Frame ${indexes[k]} / ${transfer.meta.count} (${k + 1} of ${indexes.length} in this pass)`;
-  run.k++;
-  return true;
+  tx = new Worker(new URL("./tx-worker.js", import.meta.url));
+  tx.onerror = (e) => {
+    $("send-error").textContent = `The encoder stopped: ${e.message}`;
+  };
+  tx.onmessage = ({ data }) => {
+    // A placeholder canvas keeps its own size, so give it the proportions of the real one.
+    if (data.ratio) $("code").style.aspectRatio = data.ratio;
+    switch (data.type) {
+      case "ready": {
+        for (const { mode, payload: size } of data.modes) {
+          const option = document.createElement("option");
+          option.value = mode;
+          option.textContent = `${MODE_NAMES[mode]}, ${size} B per frame`;
+          $("mode").append(option);
+        }
+        $("mode").value = DEFAULT_MODE;
+        payload = data.modes.find((m) => m.mode === DEFAULT_MODE).payload;
+        $("mode").disabled = $("file").disabled = false;
+        $("send-info").textContent = "Choose a file.";
+        if ($("file").files[0]) prepare();
+        break;
+      }
+      case "mode":
+        payload = data.payload;
+        updateInfo();
+        break;
+      case "encoded":
+        encoded = true;
+        payload = data.payload;
+        updateInfo();
+        $("send-status").textContent =
+          "Ready. Press Start transfer when the receiver is ready.";
+        setIdle(true);
+        break;
+      case "stats":
+        if (paused) break;
+        $("send-rate").textContent =
+          `Transfer rate: ${fmtRate(data.fps * payload)} (${data.fps} frames/s)`;
+        $("send-status").textContent =
+          `Sending for ${Math.round((performance.now() - sendStart) / 1000)} s. Press Reset when the receiver says Done.`;
+        break;
+      case "error":
+        $("send-error").textContent = data.message;
+        $("send-info").textContent = "";
+        break;
+    }
+  };
+  // The canvas now belongs to the worker. The page only scales it with CSS.
+  const canvas = $("code").transferControlToOffscreen();
+  tx.postMessage({ type: "init", canvas }, [canvas]);
 }
 
-// Frames change on screen refreshes only, so every frame stays up for a whole
-// number of refreshes. A timer would give uneven frame times and torn camera images.
-function tick(now) {
-  raf = 0;
-  if (!run || paused) return;
-  const gap = 1000 / fps(); // read each time, so a speed change applies at once
-  if (run.due === 0) run.due = now;
-  if (now + 4 >= run.due) {
-    if (!showNext()) return;
-    run.due = now - run.due > gap ? now + gap : run.due + gap;
-  }
-  raf = requestAnimationFrame(tick);
+function prepare() {
+  const file = $("file").files[0];
+  if (!file || !tx) return;
+  stopRun();
+  encoded = false;
+  setIdle(true);
+  $("send-error").textContent = "";
+  $("send-status").textContent = "";
+  $("send-info").textContent = "Compressing and encoding...";
+  tx.postMessage({ type: "file", file });
 }
 
-function play(indexes) {
-  run = { indexes, k: 0, due: 0 };
+$("code").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else $("code").parentElement.requestFullscreen?.();
+};
+
+$("file").onchange = prepare;
+$("mode").onchange = () =>
+  tx?.postMessage({ type: "mode", mode: Number($("mode").value) });
+$("fps").oninput = () => tx?.postMessage({ type: "fps", fps: fps() });
+$("fps").onchange = () => {
+  $("fps").value = fps();
+  tx?.postMessage({ type: "fps", fps: fps() });
+};
+
+$("start").onclick = () => {
+  $("send-error").textContent = "";
   paused = false;
+  sendStart = performance.now();
+  $("send-rate").textContent = "Transfer rate: measuring...";
   setIdle(false);
-  raf = requestAnimationFrame(tick);
-}
+  tx.postMessage({ type: "play", fps: fps() });
+};
 
 $("pause").onclick = () => {
-  if (!run) return;
   paused = !paused;
+  tx.postMessage({ type: paused ? "pause" : "resume" });
+  $("pause").textContent = paused ? "Resume" : "Pause";
   if (paused) {
-    cancelAnimationFrame(raf);
-    raf = 0;
-    $("pause").textContent = "Resume";
-    $("send-status").textContent =
-      `Paused after frame ${run.indexes[run.k - 1]}. Press Resume to continue.`;
-  } else {
-    $("pause").textContent = "Pause";
-    run.due = 0;
-    raf = requestAnimationFrame(tick);
+    $("send-rate").textContent = "Transfer rate: paused";
+    $("send-status").textContent = "Paused. Press Resume to continue.";
   }
 };
 
 $("reset-send").onclick = () => {
   stopRun();
-  drawFrame(transfer.frames[0]);
-  $("send-status").textContent =
-    "Reset. Show the metadata code again, then press Start transfer.";
-  setIdle(true);
+  $("send-status").textContent = "Stopped. Press Start transfer to send again.";
 };
 
-$("file").onchange = prepare;
-$("grid").onchange = prepare;
-$("fps").oninput = updateInfo;
-$("fps").onchange = () => {
-  $("fps").value = fps();
-  updateInfo();
-};
-$("start").onclick = () => {
-  $("send-error").textContent = "";
-  play(Array.from({ length: transfer.meta.count }, (_, i) => i + 1));
-};
-$("missing-in").oninput = (e) => {
-  e.target.value = e.target.value.replace(/[^0-9/]/g, "");
-};
-$("replay").onclick = () => {
-  $("send-error").textContent = "";
-  try {
-    play(parseMissing($("missing-in").value, transfer.meta.count));
-  } catch (e) {
-    $("send-error").textContent = e.message;
-  }
-};
+startSender();
 
 // ---------- receiver ----------
 //
-// The camera is never slowed down by decoding. Every camera frame goes to a worker as a
-// bitmap, and the worker decodes it. The page only counts, stores and draws. If the worker
-// is two frames behind, new camera frames are dropped and counted, never queued.
+// The camera is never slowed down by decoding. Every camera frame goes to an idle worker as
+// a bitmap. If every worker is busy, the frame is dropped and counted, never queued.
+// Decoded blocks go to one sink worker that runs libcimbar's fountain decoder. The fountain
+// code needs no frame numbers: any sufficient set of blocks rebuilds the file.
 
-const rx = new Receiver();
+const MODE_CYCLE = [68, 66, 67, 4];
+const POOL = Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+
 const video = $("video");
 let stream = null;
-let worker = null;
-let inflight = 0;
+let workers = [];
+let sink = null;
+let sinkReady = false;
+let lockedMode = 0; // 0 while the mode is unknown. Then the receiver tries each one in turn.
+let counter = 0;
 let result = null;
-let assembling = false;
-let failed = false;
-let forceMissing = false;
+let progress = 0;
+let firstAt = 0; // time of the first new block
+let doneAt = 0;
+let seen = new Set();
+let rateWindow = [];
 const stats = { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 };
 
-function startWorker() {
-  worker = new Worker(new URL("./rx-worker.js", import.meta.url), {
-    type: "module",
-  });
-  worker.onmessage = ({ data }) => {
-    inflight--;
-    stats.results++;
-    stats.ms += data.ms;
-    if (data.bytes) {
-      stats.read++;
-      handle(data.bytes);
+// Identical blocks carry nothing new, so a frozen sender screen does not count as progress.
+function fingerprint(buff) {
+  let h = 2166136261;
+  for (let i = 0; i < buff.length; i++) h = Math.imul(h ^ buff[i], 16777619);
+  return `${buff.length}:${h >>> 0}`;
+}
+
+function onBlock(buff, mode) {
+  if (!sinkReady) return;
+  lockedMode = mode;
+  const key = fingerprint(buff);
+  if (seen.has(key)) return;
+  seen.add(key);
+  const now = performance.now();
+  if (!firstAt) firstAt = now;
+  rateWindow.push([now, buff.length]);
+  sink?.postMessage({ type: "blocks", buff, mode }, [buff.buffer]);
+  requestRender();
+}
+
+function startSink() {
+  sink?.terminate();
+  sinkReady = false;
+  sink = new Worker(new URL("./sink-worker.js", import.meta.url));
+  sink.onmessage = ({ data }) => {
+    switch (data.type) {
+      case "ready":
+        sinkReady = true;
+        break;
+      case "progress":
+        progress = data.progress;
+        requestRender();
+        break;
+      case "done":
+        result = { name: data.name, blob: data.blob };
+        doneAt = performance.now();
+        progress = 1;
+        stopCamera();
+        sink?.terminate();
+        sink = null;
+        sinkReady = false;
+        render();
+        break;
+      case "error":
+        $("rx-error").textContent = data.message;
+        break;
     }
   };
-  worker.onerror = (e) => {
+  sink.onerror = (e) => {
     $("rx-error").textContent = `The decoder stopped: ${e.message}`;
   };
-  if (rx.meta) worker.postMessage({ type: "grid", grid: rx.meta.grid });
+}
+
+function startWorkers() {
+  workers = Array.from({ length: POOL }, () => {
+    const w = new Worker(new URL("./rx-worker.js", import.meta.url));
+    w.ready = false;
+    w.busy = false;
+    w.onmessage = ({ data }) => {
+      if (data.type === "ready") {
+        w.ready = true;
+      } else if (data.type === "error") {
+        $("rx-error").textContent = data.message;
+      } else {
+        w.busy = false;
+        stats.results++;
+        stats.ms += data.ms;
+        if (data.buff) {
+          stats.read++;
+          onBlock(data.buff, data.mode);
+        }
+      }
+    };
+    w.onerror = (e) => {
+      $("rx-error").textContent = `The decoder stopped: ${e.message}`;
+    };
+    return w;
+  });
 }
 
 function stopCamera() {
   for (const t of stream?.getTracks() ?? []) t.stop();
   stream = null;
   video.srcObject = null;
-  worker?.terminate();
-  worker = null;
-  inflight = 0;
+  for (const w of workers) w.terminate();
+  workers = [];
 }
 
 function grab() {
+  if (!sinkReady) return;
   stats.camera++;
-  if (inflight >= 2) {
+  const w = workers.find((x) => x.ready && !x.busy);
+  if (!w) {
     stats.skipped++;
     return;
   }
-  inflight++;
+  w.busy = true;
+  const mode = lockedMode || MODE_CYCLE[counter++ % MODE_CYCLE.length];
   createImageBitmap(video).then(
-    (bitmap) => worker?.postMessage({ type: "frame", bitmap }, [bitmap]),
+    (bitmap) => w.postMessage({ type: "frame", bitmap, mode }, [bitmap]),
     () => {
-      inflight--;
+      w.busy = false;
     },
   );
 }
@@ -298,6 +337,15 @@ function pump() {
 }
 
 setInterval(() => {
+  const now = performance.now();
+  rateWindow = rateWindow.filter(([t]) => now - t <= 1000);
+  if (stream && firstAt && !result) {
+    // Average over the last second, or over the time so far when the transfer is younger.
+    const span = Math.min(1000, now - firstAt) / 1000;
+    const bytes = rateWindow.reduce((sum, [, n]) => sum + n, 0);
+    $("rx-rate").textContent =
+      span > 0.2 ? `Transfer rate: ${fmtRate(bytes / span)}` : "";
+  }
   if (!stream) return;
   const { camera, results, read, skipped, ms } = stats;
   $("rx-stats").textContent =
@@ -317,8 +365,8 @@ $("cam").onclick = async () => {
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
         // The camera must run at twice the sender rate to catch every frame.
         frameRate: { ideal: 60 },
       },
@@ -331,7 +379,8 @@ $("cam").onclick = async () => {
     $("rx-error").textContent = cameraError(e);
     return;
   }
-  startWorker();
+  startWorkers();
+  if (!sink && !result) startSink();
   render();
   pump();
 };
@@ -351,23 +400,25 @@ function cameraError(e) {
   }
 }
 
+// The fountain decoder keeps its state inside the WASM module, so a reset starts a new worker.
 $("reset").onclick = () => {
-  rx.reset();
-  worker?.postMessage({ type: "grid", grid: null });
+  sink?.terminate();
+  sink = null;
+  sinkReady = false;
+  if (stream) startSink();
   result = null;
-  failed = false;
-  forceMissing = false;
+  progress = 0;
+  firstAt = doneAt = 0;
+  lockedMode = 0;
+  seen = new Set();
+  rateWindow = [];
+  $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
   render();
 };
 
-$("show-missing").onclick = () => {
-  forceMissing = true;
-  render();
-};
-
 $("download").onclick = () => {
-  const url = URL.createObjectURL(new Blob([result.bytes]));
+  const url = URL.createObjectURL(result.blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = result.name;
@@ -385,53 +436,24 @@ function requestRender() {
   }, 100);
 }
 
-function handle(bytes) {
-  const event = rx.feed(bytes);
-  if (event === "meta")
-    worker?.postMessage({ type: "grid", grid: rx.meta.grid });
-  if (event === "duplicate" || event === "foreign") return;
-  requestRender();
-  if (rx.complete() && !result && !assembling && !failed) finish();
-}
-
-async function finish() {
-  assembling = true;
-  try {
-    result = await rx.assemble();
-    stopCamera();
-  } catch (e) {
-    failed = true;
-    $("rx-error").textContent = e.message;
-  } finally {
-    assembling = false;
-    render();
-  }
-}
-
 function render() {
-  const m = rx.meta;
-  const complete = rx.complete();
   let status = "Camera is off.";
-  if (result) status = "Done. The data passed every check.";
-  else if (complete) status = "All frames received. Checking...";
-  else if (m && rx.ended) status = "The pass ended with missing frames.";
-  else if (m && rx.received === 0)
-    status = "Ready. Press Start transfer on the sender.";
-  else if (m) status = "Receiving...";
-  else if (stream)
-    status = "Point the camera at the metadata code on the sender.";
+  if (result) status = "Done. libcimbar rebuilt and decompressed the file.";
+  else if (firstAt) status = "Receiving...";
+  else if (stream) status = "Point the camera at the code on the sender.";
   $("rx-status").textContent = status;
 
-  $("rx-info").textContent = m
-    ? `File: ${m.name}\nSize: ${m.size} B (${m.packed} B compressed)\nFrames: ${rx.received} / ${rx.total}\nUnreadable or damaged frames seen: ${rx.bad}`
-    : "";
-
-  const missing = m && !complete && (rx.ended || forceMissing);
-  $("missing-box").hidden = !missing;
-  if (missing) $("missing-out").textContent = rx.missingCode();
-  $("show-missing").hidden = !m || complete || missing;
+  if (result) {
+    const seconds = (doneAt - firstAt) / 1000;
+    $("rx-rate").textContent =
+      `Average rate: ${fmtRate(result.blob.size / Math.max(seconds, 0.001))} (${fmtBytes(result.blob.size)} in ${seconds.toFixed(1)} s)`;
+    $("rx-info").textContent =
+      `File: ${result.name}\nSize: ${result.blob.size} B`;
+  } else {
+    $("rx-info").textContent = firstAt
+      ? `Progress: ${Math.round(progress * 100)}%\nBlocks received: ${seen.size}`
+      : "";
+  }
   $("download").hidden = !result;
-  if (result)
-    $("download").textContent =
-      `Download ${result.name} (${result.bytes.length} B)`;
+  if (result) $("download").textContent = `Download ${result.name}`;
 }
