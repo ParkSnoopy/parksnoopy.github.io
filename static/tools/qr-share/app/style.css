@@ -131,11 +131,10 @@ label select {
   justify-content: center;
   margin: 1rem 0;
 }
-/* Cells must stay as large as the screen allows, or the camera cannot tell them apart. */
+/* The script sizes the code so its cells are as large as the screen allows. The white
+   margin around each QR code is part of the picture and must stay white. */
 #code {
-  background: #000;
-  width: min(100%, 85vh);
-  height: auto;
+  background: #fff;
   cursor: zoom-in;
 }
 .shown:fullscreen {
@@ -144,10 +143,6 @@ label select {
   background: #000;
 }
 .shown:fullscreen #code {
-  width: auto;
-  height: 100vh;
-  max-width: 100vw;
-  object-fit: contain;
   cursor: zoom-out;
 }
 video {

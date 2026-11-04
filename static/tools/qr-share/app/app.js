@@ -1,7 +1,30 @@
-// UI glue for the color code file transfer tool. All data stays in page memory.
-// The codec is libcimbar (WASM). The encoder runs in tx-worker.js, the camera decoder in
-// rx-worker.js, and the fountain decoder in sink-worker.js. This page only wires them up.
-// All text that comes from a code is written with textContent, never innerHTML.
+// UI glue for the QR file transfer tool. All data stays in page memory.
+// The protocol, fountain code and QR decoder come from decimen-optical-transfer (AGPL-3.0),
+// see vendor/README.md. The decoder runs in rx-worker.js, one WASM instance per worker.
+// Text that comes from a code is written with textContent, never innerHTML.
+
+import {
+  LTDecoder,
+  LTEncoder,
+  DecodeWorkerPool,
+  QUIET_ZONE_MODULES as MARGIN,
+  blockLength,
+  classifyFrame,
+  createFrameQr,
+  estimateTransferProgress,
+  fitsInOneStream,
+  fnv1a,
+  frameVerdictMessage,
+  gridDims,
+  minimumFrameBytes,
+  packFile,
+  packFrame,
+  parseFrame,
+  rasterizeQr,
+  streamIdentity,
+  unpackFile,
+  verifyFile,
+} from "./vendor/decimen-core.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
@@ -14,6 +37,15 @@ const fmtBytes = (n) =>
       ? `${(n / 1e3).toFixed(1)} KB`
       : `${(n / 1e6).toFixed(2)} MB`;
 const fmtRate = (bytesPerSecond) => `${fmtBytes(bytesPerSecond)}/s`;
+
+// Keeps the screen on, or the sender freezes on one frame and the receiver loses the camera.
+async function keepAwake() {
+  try {
+    await navigator.wakeLock?.request("screen");
+  } catch {
+    // Not allowed here. The transfer still works if the screen stays on by itself.
+  }
+}
 
 // ---------- tabs ----------
 
@@ -28,509 +60,565 @@ $("tab-receive").onclick = () => showTab("receive");
 
 // ---------- sender ----------
 
-const MODE_NAMES = { 68: "B", 66: "Bu", 67: "Bm", 4: "4C" };
-const DEFAULT_MODE = 68;
+// A smaller frame is a smaller QR code, so every cell is larger on screen and easier for a
+// phone camera to tell apart. The default keeps cells large and still fills a code well.
+const FRAME_BYTES = [500, 1000, 1465, 1850, 2331, 2953];
+const DEFAULT_FRAME_BYTES = 1465;
+for (const n of FRAME_BYTES) {
+  const option = new Option(`${n} B`, n);
+  option.selected = n === DEFAULT_FRAME_BYTES;
+  $("bytes").append(option);
+}
 
 const FPS = { min: 1, max: 60, fallback: 30 };
 $("fps").min = FPS.min;
 $("fps").max = FPS.max;
 $("fps-range").textContent = `${FPS.min} to ${FPS.max}`;
-
-// Stop the user from typing a number above the limit. The lower bound is
-// enforced on change, so a number can still be typed digit by digit.
+// The lower bound is enforced on change, so a number can still be typed digit by digit.
 $("fps").addEventListener("input", () => {
   if (Number.parseInt($("fps").value, 10) > FPS.max) $("fps").value = FPS.max;
 });
-
 const fps = () =>
   clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
 
-let tx = null;
-let payload = 0; // bytes of code data per frame in the current mode
-let encoded = false;
+const LOOKAHEAD = 3; // codes made ahead per grid cell, so a flip never waits for the QR maths
+const canvas = $("code");
+const staging = document.createElement("canvas");
+
+let packed = null; // { name, size, container, compression, transmittedSize }
+let generation = 0; // a new start or reset retires the running loop
 let paused = false;
+let live = null; // the running stream: { stop, resize, flips }
+let packing = 0;
 
-let sendPart = 1;
-let sendParts = 1;
-
-function partStatus() {
-  const label = sendPart
-    ? `Part ${sendPart} of ${sendParts}`
-    : "File information";
-  return `${label}. Keep sending until the receiver says Done.`;
-}
-
-function updateInfo() {
-  const file = $("file").files[0];
-  if (!file || !payload) return;
-  $("send-info").textContent =
-    `${file.name}: ${fmtBytes(file.size)}. Each frame carries ${payload} B of code data.`;
+function fail(message) {
+  $("send-error").textContent = message;
 }
 
 function setIdle(idle) {
-  $("start").disabled = !idle || !encoded;
+  $("start").disabled = !idle || !packed;
   $("pause").disabled = $("reset-send").disabled = idle;
 }
 
 function stopRun() {
-  tx?.postMessage({ type: "stop" });
+  generation++;
+  live = null;
   paused = false;
   $("pause").textContent = "Pause";
   $("send-rate").textContent = "";
+  canvas.hidden = true;
   setIdle(true);
 }
 
-function startSender() {
-  if (!$("code").transferControlToOffscreen) {
-    $("send-info").textContent = "";
-    $("send-error").textContent =
-      "This browser has no OffscreenCanvas, so the sender cannot run. Use a current Chrome, Firefox or Safari.";
+async function prepare() {
+  const file = $("file").files[0];
+  stopRun();
+  packed = null;
+  setIdle(true);
+  fail("");
+  $("send-status").textContent = "";
+  if (!file) {
+    $("send-info").textContent = "Choose a file.";
     return;
   }
-  tx = new Worker(new URL("./tx-worker.js", import.meta.url));
-  tx.onerror = (e) => {
-    $("send-error").textContent = `The encoder stopped: ${e.message}`;
+  const id = ++packing;
+  $("send-info").textContent = "Compressing...";
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = await packFile(file.name, file.type, bytes);
+    if (id !== packing) return;
+    packed = { name: file.name, size: file.size, ...result };
+  } catch (e) {
+    if (id === packing) {
+      $("send-info").textContent = "";
+      fail(e.message);
+    }
+    return;
+  }
+  updateInfo();
+  setIdle(true);
+}
+
+function updateInfo() {
+  if (!packed) return;
+  const frameBytes = Number($("bytes").value);
+  const blockLen = blockLength(frameBytes);
+  const sent =
+    packed.compression === "gzip"
+      ? `${fmtBytes(packed.size)}, ${fmtBytes(packed.transmittedSize)} after gzip`
+      : fmtBytes(packed.size);
+  $("send-info").textContent =
+    `${packed.name}: ${sent}. Each frame carries ${blockLen} B of file data.`;
+}
+
+function startStream() {
+  const gen = ++generation;
+  const frameBytes = Number($("bytes").value);
+  const codes = Number($("codes").value);
+  const { cols, rows } = gridDims(codes);
+  const container = packed.container;
+  if (!fitsInOneStream(container.length, frameBytes)) {
+    fail(
+      `This file needs more than 65,535 blocks at ${frameBytes} B per frame. Pick at least ${minimumFrameBytes(container.length)} B per frame.`,
+    );
+    return false;
+  }
+  const blockLen = blockLength(frameBytes);
+  const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
+  const encoder = new LTEncoder(container, blockLen, sessionId);
+  const header = {
+    sessionId,
+    seq: 0,
+    k: encoder.k,
+    blockLen,
+    totalLen: container.length,
+    payloadFnv: fnv1a(container),
+    flags: 0,
   };
-  tx.onmessage = ({ data }) => {
-    // A placeholder canvas keeps its own size, so give it the proportions of the real one.
-    if (data.ratio) $("code").style.aspectRatio = data.ratio;
-    switch (data.type) {
-      case "ready": {
-        for (const { mode, payload: size } of data.modes) {
-          const option = document.createElement("option");
-          option.value = mode;
-          option.textContent = `${MODE_NAMES[mode]}, ${size} B per frame`;
-          $("mode").append(option);
-        }
-        $("mode").value = DEFAULT_MODE;
-        payload = data.modes.find((m) => m.mode === DEFAULT_MODE).payload;
-        $("mode").disabled = $("file").disabled = false;
-        $("send-info").textContent = "Choose a file.";
-        if ($("file").files[0]) prepare();
+  let version; // the first code locks it. Every later code has the same size.
+  let modules = 0;
+  let scale = 1;
+  let seq = 0;
+  const cells = Array(codes).fill(null); // last image per grid cell, for repainting
+  const queue = [];
+
+  const makeCell = () => {
+    const bytes = packFrame({ ...header, seq }, encoder.encode(seq));
+    seq++;
+    const qr = createFrameQr(bytes, "L", version);
+    version ??= qr.version;
+    modules = qr.modules.size;
+    const raster = rasterizeQr(modules, qr.modules.data, MARGIN);
+    return new ImageData(
+      new Uint8ClampedArray(raster.pixels.buffer),
+      raster.size,
+      raster.size,
+    );
+  };
+
+  // Fits the code to the space it has. The raster stays at a whole number of pixels per
+  // module and CSS stretches the rest smoothly. A jagged module width is harder to read.
+  const sizeCanvas = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const cell = modules + 2 * MARGIN;
+    const totalW = cell * cols;
+    const totalH = cell * rows;
+    const full = document.fullscreenElement === canvas.parentElement;
+    const budgetW = full
+      ? window.innerWidth
+      : Math.min(canvas.parentElement.clientWidth, 760);
+    const budgetH = full ? window.innerHeight : window.innerHeight * 0.85;
+    scale = Math.max(
+      1,
+      Math.floor(Math.min((budgetW * dpr) / totalW, (budgetH * dpr) / totalH)),
+    );
+    staging.width = totalW;
+    staging.height = totalH;
+    canvas.width = totalW * scale;
+    canvas.height = totalH * scale;
+    const nativeW = (totalW * scale) / dpr;
+    const nativeH = (totalH * scale) / dpr;
+    const stretch = Math.max(1, Math.min(budgetW / nativeW, budgetH / nativeH));
+    canvas.style.width = `${nativeW * stretch}px`;
+    canvas.style.height = `${nativeH * stretch}px`;
+    const sctx = staging.getContext("2d");
+    cells.forEach((img, i) => {
+      if (img)
+        sctx.putImageData(img, (i % cols) * cell, Math.floor(i / cols) * cell);
+    });
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(staging, 0, 0, canvas.width, canvas.height);
+  };
+
+  const pump = (max) => {
+    for (let n = 0; n < max && queue.length < LOOKAHEAD * codes; n++)
+      queue.push(makeCell());
+  };
+  try {
+    pump(LOOKAHEAD * codes);
+  } catch (e) {
+    fail(e.message);
+    return false;
+  }
+  canvas.hidden = false;
+  sizeCanvas();
+  const flips = [];
+  live = { resize: sizeCanvas, flips, codes, blockLen };
+
+  // Each cell flips at its own phase of the frame interval. A camera exposure that spans a
+  // flip then catches at most one code half changed, not all of them at once.
+  let cursor = 0;
+  let nextAt = performance.now();
+  const tick = (now) => {
+    if (gen !== generation) return;
+    requestAnimationFrame(tick);
+    if (paused) {
+      nextAt = now;
+      return;
+    }
+    const interval = 1000 / fps();
+    const sub = interval / codes;
+    if (now < nextAt) return;
+    if (now - nextAt > interval) nextAt = now; // after a stall, do not burst out old frames
+    while (now >= nextAt) {
+      const img = queue.shift();
+      pump(1);
+      if (!img) {
+        nextAt = now + sub;
         break;
       }
-      case "mode":
-        payload = data.payload;
-        updateInfo();
-        break;
-      case "encoded":
-        encoded = true;
-        payload = data.payload;
-        sendPart = data.part;
-        sendParts = data.parts;
-        updateInfo();
-        $("send-status").textContent = data.running
-          ? partStatus()
-          : "File information ready. Press Start transfer when the receiver is ready.";
-        setIdle(!data.running);
-        break;
-      case "encoding":
-        encoded = false;
-        $("start").disabled = true;
-        $("send-status").textContent = data.part
-          ? `Encoding part ${data.part} of ${data.parts}...`
-          : "Encoding file information...";
-        break;
-      case "stats":
-        if (paused) break;
-        $("send-rate").textContent =
-          `Transfer rate: ${fmtRate(data.fps * payload)} (${data.fps} frames/s)`;
-        $("send-status").textContent = partStatus();
-        break;
-      case "error":
-        $("send-error").textContent = data.message;
-        $("send-info").textContent = "";
-        break;
+      const cell = modules + 2 * MARGIN;
+      const cx = (cursor % cols) * cell;
+      const cy = Math.floor(cursor / cols) * cell;
+      cells[cursor] = img;
+      staging.getContext("2d").putImageData(img, cx, cy);
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        staging,
+        cx,
+        cy,
+        cell,
+        cell,
+        cx * scale,
+        cy * scale,
+        cell * scale,
+        cell * scale,
+      );
+      flips.push(now);
+      cursor = (cursor + 1) % codes;
+      nextAt += sub;
     }
   };
-  // The canvas now belongs to the worker. The page only scales it with CSS.
-  const canvas = $("code").transferControlToOffscreen();
-  tx.postMessage({ type: "init", canvas }, [canvas]);
+  requestAnimationFrame(tick);
+  $("send-info").textContent =
+    `${packed.name}: QR version ${version}, ${modules} modules wide, ${codes} on screen, ${encoder.k} blocks.`;
+  return true;
 }
 
-function prepare() {
-  const file = $("file").files[0];
-  if (!file || !tx) return;
-  stopRun();
-  encoded = false;
-  setIdle(true);
-  $("send-error").textContent = "";
-  $("send-status").textContent = "";
-  $("send-info").textContent = "Compressing and encoding...";
-  tx.postMessage({ type: "file", file, fps: fps() });
-}
+setInterval(() => {
+  if (!live || paused) return;
+  const now = performance.now();
+  while (live.flips.length && now - live.flips[0] > 1000) live.flips.shift();
+  const perSecond = live.flips.length;
+  $("send-rate").textContent =
+    `Transfer rate: ${fmtRate(perSecond * live.blockLen)} (${perSecond} frames/s)`;
+}, 500);
 
-$("code").onclick = () => {
+window.addEventListener("resize", () => live?.resize());
+document.addEventListener("fullscreenchange", () => live?.resize());
+canvas.onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
-  else $("code").parentElement.requestFullscreen?.();
+  else canvas.parentElement.requestFullscreen?.();
 };
 
 $("file").onchange = prepare;
-$("mode").onchange = () => {
-  tx?.postMessage({ type: "mode", mode: Number($("mode").value) });
-  // The still metadata code was built for the old chunk size, so build it again.
-  if ($("file").files[0]) prepare();
+$("bytes").onchange = $("codes").onchange = () => {
+  if (live) stopRun();
+  updateInfo();
+  $("send-status").textContent = "";
 };
-$("fps").oninput = () => tx?.postMessage({ type: "fps", fps: fps() });
 $("fps").onchange = () => {
   $("fps").value = fps();
-  tx?.postMessage({ type: "fps", fps: fps() });
 };
 
 $("start").onclick = () => {
-  $("send-error").textContent = "";
+  fail("");
   paused = false;
-
+  if (!startStream()) return;
+  keepAwake();
   $("send-rate").textContent = "Transfer rate: measuring...";
+  $("send-status").textContent =
+    "Sending. The stream repeats until you press Reset, so keep it up until the receiver says Done.";
   setIdle(false);
-  tx.postMessage({ type: "play", fps: fps() });
 };
 
 $("pause").onclick = () => {
   paused = !paused;
-  tx.postMessage({ type: paused ? "pause" : "resume" });
   $("pause").textContent = paused ? "Resume" : "Pause";
-  if (paused) {
-    $("send-rate").textContent = "Transfer rate: paused";
-    $("send-status").textContent = "Paused. Press Resume to continue.";
-  }
+  if (paused) $("send-rate").textContent = "Transfer rate: paused";
 };
 
 $("reset-send").onclick = () => {
   stopRun();
   $("send-status").textContent = "Stopped. Press Start transfer to send again.";
+  updateInfo();
 };
-
-startSender();
 
 // ---------- receiver ----------
 //
-// The camera is never slowed down by decoding. Every camera frame goes to an idle worker as
-// a bitmap. If every worker is busy, the frame is dropped and counted, never queued.
-// Decoded blocks go to one sink worker that runs libcimbar's fountain decoder. The fountain
-// code needs no frame numbers: any sufficient set of blocks rebuilds the file.
+// The scene is mostly still, so once a code is found the next frames are cut down to a
+// padded box around it. Small pictures decode faster, and the decoder can skip its search
+// and read the code straight from its last four corners. A full-frame scan still runs now
+// and then to find new codes. The camera is never slowed down: a frame that finds every
+// worker busy is dropped and counted, never queued. The fountain code does not need it.
 
-const MODE_CYCLE = [68, 66, 67, 4];
-const POOL = Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+const REGION_TTL_MS = 1500;
+const FULL_SCAN_MS = 1500;
+const FULL_SCAN_DEGRADED_MS = 250;
+const ACQUISITION_SCAN_MS = 100;
+const EXPECTED_DECAY_MS = 10_000;
+const REGION_PAD = 0.35;
+const MAX_REGIONS = 9;
+const WORKERS = Math.max(
+  2,
+  Math.min(4, (navigator.hardwareConcurrency || 4) - 1),
+);
 
 const video = $("video");
+const grab = document.createElement("canvas");
 let stream = null;
-let workers = [];
-let sink = null;
-let sinkReady = false;
-let lockedMode = 0; // 0 while the mode is unknown. Then the receiver tries each one in turn.
-let counter = 0;
-let useFrames = typeof VideoFrame === "function";
-let result = null;
-let progress = 0;
-let firstAt = 0; // time of the first new block
-let doneAt = 0;
-let seen = new Set();
-let rateWindow = [];
-let receivedParts = null;
-let receiveGeneration = 0;
-let partNotice = "";
-const stats = { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 };
+let captureGen = 0;
+let done = false;
+let decoder = null;
+let streamKey = "";
+let startedAt = 0;
+let result = null; // { file, seconds }
+let regions = [];
+let lastFullScan = 0;
+let cropRotate = 0;
+let expected = 0;
+let expectedAt = 0;
+let frameId = 0;
+let verdict = "";
+const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
+let shown = { ...stats };
+let rateWindow = []; // [time, payload bytes] for every useful frame
 
-async function receivePart(data) {
-  if (data.name === "cimbar-info-v1") {
-    if (data.blob.size > 4096) throw new Error("Invalid transfer information.");
-    const generation = receiveGeneration;
-    const info = JSON.parse(await data.blob.text());
-    if (generation !== receiveGeneration) return null;
-    if (
-      !/^[0-9a-f-]{36}$/.test(info.id) ||
-      typeof info.name !== "string" ||
-      !info.name ||
-      !Number.isSafeInteger(info.size) ||
-      info.size < 0 ||
-      !Number.isInteger(info.count) ||
-      info.count < 1 ||
-      info.count > 120 ||
-      info.count !== Math.max(1, Math.ceil(info.size / (10 * 1024 * 1024)))
-    )
-      throw new Error("Invalid transfer information.");
-    if (
-      receivedParts &&
-      (receivedParts.id !== info.id ||
-        receivedParts.name !== info.name ||
-        receivedParts.size !== info.size ||
-        receivedParts.parts.length !== info.count)
-    )
-      throw new Error(
-        "A different transfer is already in progress. Reset the receiver first.",
-      );
-    receivedParts ??= {
-      id: info.id,
-      name: info.name,
-      size: info.size,
-      parts: Array(info.count).fill(null),
-    };
-    progress = 0;
-    partNotice = "File information received. Waiting for file data.";
-    render();
-    return null;
-  }
-  const fields = data.name.split(".");
-  if (fields[0] !== "cimbar-part-v1") return data;
-  if (
-    fields.length !== 7 ||
-    !/^[0-9a-f-]{36}$/.test(fields[1]) ||
-    !/^\d+$/.test(fields[2]) ||
-    !/^\d+$/.test(fields[3]) ||
-    !/^\d+$/.test(fields[4]) ||
-    !/^[0-9a-f]{64}$/.test(fields[5])
-  )
-    throw new Error("Invalid transfer part metadata.");
-  const [, id, partText, countText, sizeText, hash, encodedName] = fields;
-  const index = Number(partText),
-    count = Number(countText),
-    size = Number(sizeText);
-  const partSize = 10 * 1024 * 1024;
-  if (
-    !Number.isSafeInteger(size) ||
-    count < 1 ||
-    count > 120 ||
-    count !== Math.max(1, Math.ceil(size / partSize)) ||
-    index >= count ||
-    data.blob.size !== Math.min(partSize, size - index * partSize)
-  )
-    throw new Error("Invalid transfer part size.");
-  const name = new TextDecoder("utf-8", { fatal: true }).decode(
-    Uint8Array.from(atob(encodedName), (c) => c.charCodeAt(0)),
-  );
-  if (!name) throw new Error("Invalid transfer file name.");
-  if (
-    receivedParts &&
-    (receivedParts.id !== id ||
-      receivedParts.name !== name ||
-      receivedParts.size !== size ||
-      receivedParts.parts.length !== count)
-  )
-    throw new Error(
-      "A different transfer is already in progress. Reset the receiver first.",
-    );
-  const generation = receiveGeneration;
-  const bytes = await data.blob.arrayBuffer();
-  const digest = Array.from(
-    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-    (b) => b.toString(16).padStart(2, "0"),
-  ).join("");
-  if (generation !== receiveGeneration) return null;
-  if (digest !== hash)
-    throw new Error(`Part ${index + 1} failed its integrity check.`);
-  receivedParts ??= { id, name, size, parts: Array(count).fill(null) };
-  receivedParts.parts[index] = data.blob;
-  const have = receivedParts.parts.filter(Boolean).length;
-  if (have !== count) {
-    progress = 0;
-    partNotice = `Part ${index + 1} received.`;
-    render();
-    return null;
-  }
-  return { name, blob: new Blob(receivedParts.parts) };
-}
+const pool = new DecodeWorkerPool(
+  () => new Worker(new URL("./rx-worker.js", import.meta.url)),
+  (bytes, box, info) => onDecoded(bytes, box, info),
+  (box) => noteRegion(box, performance.now(), false),
+  () => stats.attempts++,
+);
 
-// Identical blocks carry nothing new, so a frozen sender screen does not count as progress.
-function fingerprint(buff) {
-  let h = 2166136261;
-  for (let i = 0; i < buff.length; i++) h = Math.imul(h ^ buff[i], 16777619);
-  return `${buff.length}:${h >>> 0}`;
-}
-
-function onBlock(buff, mode) {
-  if (!sinkReady) return;
-  lockedMode = mode;
-  const key = fingerprint(buff);
-  if (seen.has(key)) return;
-  seen.add(key);
-  const now = performance.now();
-  if (!firstAt) firstAt = now;
-  rateWindow.push([now, buff.length]);
-  sink?.postMessage({ type: "blocks", buff, mode }, [buff.buffer]);
-  requestRender();
-}
-
-function startSink() {
-  sink?.terminate();
-  sinkReady = false;
-  sink = new Worker(new URL("./sink-worker.js", import.meta.url));
-  sink.onmessage = async ({ data }) => {
-    switch (data.type) {
-      case "ready":
-        sinkReady = true;
-        break;
-      case "progress":
-        progress = data.progress;
-        requestRender();
-        break;
-      case "done": {
-        try {
-          const completed = await receivePart(data);
-          if (completed) result = completed;
-        } catch (e) {
-          $("rx-error").textContent = e.message;
-          break;
-        }
-        if (!result) break;
-        doneAt = performance.now();
-        progress = 1;
-        stopCamera();
-        sink?.terminate();
-        sink = null;
-        sinkReady = false;
-        render();
-        break;
+function noteRegion(box, now, decodedHere = true, info) {
+  for (const r of regions) {
+    const dx = Math.abs(box.x + box.w / 2 - (r.x + r.w / 2));
+    const dy = Math.abs(box.y + box.h / 2 - (r.y + r.h / 2));
+    if (dx < Math.max(box.w, r.w) / 2 && dy < Math.max(box.h, r.h) / 2) {
+      if (!decodedHere) {
+        r.seen = now; // A failed detection can keep a box alive but never move it.
+        return;
       }
-      case "error":
-        $("rx-error").textContent = data.message;
-        break;
+      r.drift = 0.5 * (r.drift ?? 0) + 0.5 * Math.hypot(dx, dy);
+      Object.assign(r, box, { seen: now, decoded: true });
+      if (info?.quad) r.quad = info.quad;
+      if (info?.modules) r.dim = info.modules;
+      return;
     }
-  };
-  sink.onerror = (e) => {
-    $("rx-error").textContent = `The decoder stopped: ${e.message}`;
-  };
+  }
+  if (!decodedHere) {
+    // Grid codes share one size, so a sighting far off a proven code's size is noise.
+    const reference = regions.find((r) => r.decoded);
+    if (!reference) return;
+    const ratio = Math.max(box.w, box.h) / Math.max(reference.w, reference.h);
+    if (ratio < 0.5 || ratio > 2) return;
+  }
+  regions.push({
+    ...box,
+    seen: now,
+    decoded: decodedHere,
+    quad: info?.quad,
+    dim: info?.modules,
+  });
+  if (regions.length > MAX_REGIONS) {
+    regions.sort(
+      (a, b) => Number(b.decoded) - Number(a.decoded) || b.seen - a.seen,
+    );
+    regions.length = MAX_REGIONS;
+  }
 }
 
-function startWorkers() {
-  workers = Array.from({ length: POOL }, () => {
-    const w = new Worker(new URL("./rx-worker.js", import.meta.url));
-    w.ready = false;
-    w.busy = false;
-    w.onmessage = ({ data }) => {
-      if (data.type === "ready") {
-        w.ready = true;
-      } else if (data.type === "error") {
-        $("rx-error").textContent = data.message;
-      } else {
-        w.busy = false;
-        stats.results++;
-        stats.ms += data.ms;
-        if (data.buff) {
-          stats.read++;
-          onBlock(data.buff, data.mode);
-        }
-      }
-    };
-    w.onerror = (e) => {
-      $("rx-error").textContent = `The decoder stopped: ${e.message}`;
-    };
-    return w;
-  });
+function captureFrame() {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return;
+  const now = performance.now();
+  stats.captured++;
+  if (pool.busyCount === pool.size) {
+    stats.dropped++;
+    return;
+  }
+  regions = regions.filter((r) => now - r.seen <= REGION_TTL_MS);
+  const proven = regions.filter((r) => r.decoded).length;
+  if (proven >= expected || now - expectedAt > EXPECTED_DECAY_MS) {
+    expected = proven;
+    expectedAt = now;
+  }
+  // Fewer codes than the stream has shown means one is missing. Crops cannot find it,
+  // so look at the whole frame more often until it is back.
+  const interval =
+    proven === 0
+      ? ACQUISITION_SCAN_MS
+      : proven < expected
+        ? FULL_SCAN_DEGRADED_MS
+        : FULL_SCAN_MS;
+  if (grab.width !== vw || grab.height !== vh) {
+    grab.width = vw;
+    grab.height = vh;
+  }
+  const ctx = grab.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0);
+  if (now - lastFullScan > interval) {
+    lastFullScan = now;
+    const img = ctx.getImageData(0, 0, vw, vh);
+    pool.submit(
+      {
+        id: frameId++,
+        buf: img.data.buffer,
+        w: vw,
+        h: vh,
+        ox: 0,
+        oy: 0,
+        full: true,
+      },
+      [img.data.buffer],
+    );
+    return;
+  }
+  for (let i = 0; i < regions.length; i++) {
+    const r = regions[(i + cropRotate) % regions.length];
+    // The box leads a moving code by twice the drift seen between its last decodes.
+    const size = Math.max(r.w, r.h);
+    const pad = Math.round(
+      size * REGION_PAD + Math.min(size, 2 * (r.drift ?? 0)),
+    );
+    const x = Math.max(0, Math.floor(r.x - pad));
+    const y = Math.max(0, Math.floor(r.y - pad));
+    const w = Math.min(vw - x, Math.ceil(r.w + 2 * pad));
+    const h = Math.min(vh - y, Math.ceil(r.h + 2 * pad));
+    if (w < 32 || h < 32) continue;
+    const img = ctx.getImageData(x, y, w, h);
+    const taken = pool.submit(
+      {
+        id: frameId++,
+        buf: img.data.buffer,
+        w,
+        h,
+        ox: x,
+        oy: y,
+        full: false,
+        quad: r.quad,
+        dim: r.dim,
+      },
+      [img.data.buffer],
+    );
+    if (!taken) break;
+  }
+  cropRotate++;
+}
+
+function schedule(gen) {
+  if (done || gen !== captureGen) return;
+  const next = () => {
+    if (done || gen !== captureGen) return;
+    captureFrame();
+    schedule(gen);
+  };
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(next);
+  else requestAnimationFrame(next);
+}
+
+function onDecoded(bytes, box, info) {
+  if (done) return;
+  stats.decoded++;
+  if (info?.tracked) stats.tracked++;
+  if (box) noteRegion(box, performance.now(), true, info);
+  const parsed = parseFrame(bytes);
+  if (!parsed) {
+    // Some other QR code, or a frame from a different version of the sender.
+    const message = frameVerdictMessage(classifyFrame(bytes));
+    if (message && message !== verdict) {
+      verdict = message;
+      $("rx-error").textContent = message;
+    }
+    return;
+  }
+  if (verdict) {
+    verdict = "";
+    $("rx-error").textContent = "";
+  }
+  const { header, block } = parsed;
+  const key = streamIdentity(header);
+  if (!decoder || key !== streamKey) {
+    decoder = new LTDecoder(
+      header.k,
+      header.blockLen,
+      header.sessionId,
+      header.totalLen,
+    );
+    streamKey = key;
+    startedAt = performance.now();
+    rateWindow = [];
+  }
+  const before = decoder.framesNew - decoder.framesRedundant;
+  decoder.addFrame(header.seq, block);
+  if (decoder.framesNew - decoder.framesRedundant > before)
+    rateWindow.push([performance.now(), header.blockLen]);
+  if (decoder.isComplete) finish(header);
+  else requestRender();
+}
+
+async function finish(header) {
+  const generationNow = captureGen;
+  done = true;
+  captureGen++;
+  const seconds = (performance.now() - startedAt) / 1000;
+  try {
+    const container = decoder.assemble();
+    if (fnv1a(container) !== header.payloadFnv)
+      throw new Error(
+        "The received data failed its checksum. Press Reset and try again.",
+      );
+    const file = await unpackFile(container);
+    if (!(await verifyFile(file)))
+      throw new Error(
+        "The file failed its SHA-256 check. Press Reset and try again.",
+      );
+    if (generationNow !== captureGen - 1) return; // reset while checking
+    result = { file, seconds };
+    stopCamera();
+  } catch (e) {
+    $("rx-error").textContent = e.message;
+    done = false;
+    decoder = null;
+    captureGen++;
+    schedule(captureGen);
+  }
+  render();
 }
 
 function stopCamera() {
   for (const t of stream?.getTracks() ?? []) t.stop();
   stream = null;
   video.srcObject = null;
-  for (const w of workers) w.terminate();
-  workers = [];
+  pool.resize(0);
+  regions = [];
 }
 
-function grab() {
-  if (!sinkReady) return;
-  stats.camera++;
-  const w = workers.find((x) => x.ready && !x.busy);
-  if (!w) {
-    stats.skipped++;
-    return;
-  }
-  w.busy = true;
-  const mode = lockedMode || MODE_CYCLE[counter++ % MODE_CYCLE.length];
-  // A VideoFrame keeps the camera's own pixel format, so the worker skips the canvas and
-  // the RGBA conversion. Browsers without it fall back to a bitmap.
-  if (useFrames) {
-    let frame;
-    try {
-      frame = new VideoFrame(video, {
-        timestamp: Math.round(video.currentTime * 1e6),
-      });
-      w.postMessage({ type: "frame", frame, mode }, [frame]);
-      return;
-    } catch {
-      frame?.close();
-      useFrames = false;
-    }
-  }
-  createImageBitmap(video).then(
-    (bitmap) => w.postMessage({ type: "frame", bitmap, mode }, [bitmap]),
-    () => {
-      w.busy = false;
-    },
-  );
-}
-
-// One grab per new camera frame, not per screen refresh.
-function pump() {
-  if (video.requestVideoFrameCallback) {
-    const next = () => {
-      if (!stream) return;
-      grab();
-      video.requestVideoFrameCallback(next);
-    };
-    video.requestVideoFrameCallback(next);
-    return;
-  }
-  let last = -1;
-  const poll = () => {
-    if (!stream) return;
-    if (video.currentTime !== last) {
-      last = video.currentTime;
-      grab();
-    }
-    requestAnimationFrame(poll);
+// Frame rate is demanded exactly first, because some phones answer a polite request for
+// 60 fps with 30. The retry takes whatever the camera can give.
+async function acquireCamera() {
+  const base = {
+    facingMode: "environment",
+    width: { ideal: 1280 },
+    height: { ideal: 960 },
   };
-  poll();
-}
-
-setInterval(() => {
-  const now = performance.now();
-  rateWindow = rateWindow.filter(([t]) => now - t <= 1000);
-  if (stream && firstAt && !result) {
-    // Average over the last second, or over the time so far when the transfer is younger.
-    const span = Math.min(1000, now - firstAt) / 1000;
-    const bytes = rateWindow.reduce((sum, [, n]) => sum + n, 0);
-    $("rx-rate").textContent =
-      span > 0.2 ? `Transfer rate: ${fmtRate(bytes / span)}` : "";
-  }
-  if (!stream) return;
-  const { camera, results, read, skipped, ms } = stats;
-  $("rx-stats").textContent =
-    `Camera ${camera} frames/s, read ${read}/s, dropped while busy ${skipped}/s, decode ${results ? (ms / results).toFixed(1) : "0"} ms`;
-  Object.assign(stats, { camera: 0, results: 0, read: 0, skipped: 0, ms: 0 });
-}, 1000);
-
-$("cam").onclick = async () => {
-  $("rx-error").textContent = "";
-  if (stream) return;
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    $("rx-error").textContent =
-      `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
-    return;
-  }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "environment",
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        // The camera must run at twice the sender rate to catch every frame.
-        frameRate: { ideal: 60 },
-      },
+    return await navigator.mediaDevices.getUserMedia({
       audio: false,
+      video: { ...base, frameRate: { exact: 60 } },
     });
-    video.srcObject = stream;
-    await video.play();
   } catch (e) {
-    stopCamera();
-    $("rx-error").textContent = cameraError(e);
-    return;
+    if (e.name === "NotAllowedError" || e.name === "SecurityError") throw e;
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { ...base, frameRate: { ideal: 60 } },
+    });
   }
-  startWorkers();
-  if (!sink && !result) startSink();
-  render();
-  pump();
-};
+}
 
 function cameraError(e) {
   switch (e.name) {
@@ -547,34 +635,81 @@ function cameraError(e) {
   }
 }
 
-// The fountain decoder keeps its state inside the WASM module, so a reset starts a new worker.
+$("cam").onclick = async () => {
+  $("rx-error").textContent = "";
+  if (stream) return;
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    $("rx-error").textContent =
+      `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
+    return;
+  }
+  try {
+    stream = await acquireCamera();
+    video.srcObject = stream;
+    await video.play();
+  } catch (e) {
+    stopCamera();
+    $("rx-error").textContent = cameraError(e);
+    return;
+  }
+  done = false;
+  pool.resize(WORKERS);
+  keepAwake();
+  captureGen++;
+  schedule(captureGen);
+  render();
+};
+
 $("reset").onclick = () => {
-  ++receiveGeneration;
-  receivedParts = null;
-  partNotice = "";
-  sink?.terminate();
-  sink = null;
-  sinkReady = false;
-  if (stream) startSink();
+  captureGen++;
+  decoder = null;
+  streamKey = "";
   result = null;
-  progress = 0;
-  firstAt = doneAt = 0;
-  lockedMode = 0;
-  seen = new Set();
+  regions = [];
   rateWindow = [];
+  verdict = "";
+  startedAt = 0;
   $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
+  if (stream) {
+    done = false;
+    schedule(captureGen);
+  }
   render();
 };
 
 $("download").onclick = () => {
-  const url = URL.createObjectURL(result.blob);
+  const url = URL.createObjectURL(
+    new Blob([result.file.bytes], {
+      type: result.file.type || "application/octet-stream",
+    }),
+  );
   const a = document.createElement("a");
   a.href = url;
-  a.download = result.name;
+  a.download = result.file.name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 };
+
+setInterval(() => {
+  const now = performance.now();
+  rateWindow = rateWindow.filter(([t]) => now - t <= 1000);
+  if (stream && decoder && !result) {
+    const span = Math.min(1000, now - startedAt) / 1000;
+    const bytes = rateWindow.reduce((sum, [, n]) => sum + n, 0);
+    $("rx-rate").textContent =
+      span > 0.2 ? `Transfer rate: ${fmtRate(bytes / span)}` : "";
+  }
+  if (!stream) return;
+  const s = { ...stats };
+  const d = (k) => s[k] - shown[k];
+  const tried = d("attempts");
+  $("rx-stats").textContent =
+    `Camera ${d("captured")} frames/s, decoded ${d("decoded")}/s, dropped while busy ${d("dropped")}/s, codes tracked ${regions.filter((r) => r.decoded).length}` +
+    (tried ? `, fast path ${Math.round((100 * d("tracked")) / tried)}%` : "");
+  shown = s;
+  if (decoder && !result) render();
+}, 1000);
 
 let renderTimer = 0;
 // Redraw at most ten times a second, whatever the frame rate is.
@@ -588,27 +723,30 @@ function requestRender() {
 
 function render() {
   let status = "Camera is off.";
-  if (result) status = "Done. libcimbar rebuilt and decompressed the file.";
-  else if (partNotice) status = partNotice;
-  else if (firstAt) status = "Receiving...";
+  if (result) status = "Done. The file is rebuilt and its SHA-256 matches.";
+  else if (decoder) status = "Receiving...";
   else if (stream) status = "Point the camera at the code on the sender.";
   $("rx-status").textContent = status;
 
   if (result) {
-    const seconds = (doneAt - firstAt) / 1000;
+    const { file, seconds } = result;
     $("rx-rate").textContent =
-      `Average rate: ${fmtRate(result.blob.size / Math.max(seconds, 0.001))} (${fmtBytes(result.blob.size)} in ${seconds.toFixed(1)} s)`;
+      `Average rate: ${fmtRate(file.bytes.length / Math.max(seconds, 0.001))} (${fmtBytes(file.bytes.length)} in ${seconds.toFixed(1)} s)`;
     $("rx-info").textContent =
-      `File: ${result.name}\nSize: ${result.blob.size} B`;
-  } else if (receivedParts) {
-    const have = receivedParts.parts.filter(Boolean).length;
+      `File: ${file.name}\nSize: ${file.bytes.length} B`;
+  } else if (decoder) {
+    const useful = decoder.framesNew - decoder.framesRedundant;
+    const estimate = estimateTransferProgress(
+      decoder.k,
+      useful,
+      (performance.now() - startedAt) / 1000,
+      decoder.solvedCount,
+    );
     $("rx-info").textContent =
-      `File: ${receivedParts.name}\nSize: ${receivedParts.size} B\nParts complete: ${have} of ${receivedParts.parts.length}\nCurrent part: ${Math.round(progress * 100)}%`;
+      `Progress: ${Math.floor(estimate.fraction * 100)}%\nBlocks solved: ${decoder.solvedCount} of ${decoder.k}\nFrames used: ${useful}`;
   } else {
-    $("rx-info").textContent = firstAt
-      ? `Progress: ${Math.round(progress * 100)}%\nBlocks received: ${seen.size}`
-      : "";
+    $("rx-info").textContent = "";
   }
   $("download").hidden = !result;
-  if (result) $("download").textContent = `Download ${result.name}`;
+  if (result) $("download").textContent = `Download ${result.file.name}`;
 }

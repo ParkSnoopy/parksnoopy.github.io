@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Color code file share</title>
+    <title>QR file share</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <p><a href="../">&lt; back to the tool page</a></p>
-    <h1>Color code file share</h1>
+    <h1>QR file share</h1>
     <p class="dim">
       Everything runs in this page. Nothing is uploaded, and nothing leaves your
       device after the page has loaded.
@@ -20,20 +20,27 @@
     </nav>
 
     <section id="send">
-      <label>File <input id="file" type="file" disabled /></label>
+      <label>File <input id="file" type="file" /></label>
       <div class="row">
         <label
-          >Code mode
-          <select id="mode" disabled></select>
+          >Bytes per frame
+          <select id="bytes"></select>
+        </label>
+        <label
+          >Codes on screen
+          <select id="codes">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+          </select>
         </label>
         <label
           >Frames per second (<span id="fps-range"></span>)
           <input id="fps" type="number" min="1" max="60" value="30"
         /></label>
       </div>
-      <p id="send-info" class="dim">Loading the encoder...</p>
-      <div class="shown"><canvas id="code"></canvas></div>
-      <p class="dim">Click the code to show it full screen.</p>
+      <p id="send-info" class="dim">Choose a file.</p>
+      <div class="shown"><canvas id="code" hidden></canvas></div>
       <p id="send-status"></p>
       <p id="send-rate"></p>
       <div class="row">
