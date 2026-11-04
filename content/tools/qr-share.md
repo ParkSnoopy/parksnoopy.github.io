@@ -15,7 +15,7 @@ The page makes no network requests after it has loaded, so you can turn the netw
 
 1. Open the tool on both devices. There is nothing to switch. A page waits with its camera on. The browser asks for camera permission the first time.
 2. On the device that has the file, choose it. That page becomes the sender. It shows one META code that names the file and holds the data back. You can change the bytes per frame and the number of codes on screen. The defaults are 1,465 bytes, one code, and 30 frames per second.
-3. Face the two screens toward each other's cameras. The sender's camera turns on once a file is chosen.
+3. Face the two screens toward each other's cameras. The sender's camera turns on once a file is chosen. A waiting page uses the back camera and a sender uses the front camera. If the device has more than one camera, a Camera list appears and lets you pick another.
 4. Nothing else is needed, and there is no Start button. The waiting page reads the META code, becomes the receiver, and shows an ACK code. The sender reads that answer and starts sending. The receiver keeps the ACK code on its screen with how many blocks it has and which runs it lacks. The sender reads that while it keeps sending, plays the missing blocks in between, and stops by itself when the receiver says the file is complete. Nothing pauses for this. If the link drops, the sender keeps sending as before.
    Click the code to show it full screen. A browser only allows full screen after a click. In full screen the keys still work. Space pauses and resumes. Left and Right step one frame while paused. Up and Down change the speed by 5 fps. A line in the corner shows the state.
 5. Keep both devices still. The receiver shows its progress and the transfer rate.

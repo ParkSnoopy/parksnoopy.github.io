@@ -77,6 +77,75 @@ function setMode(next) {
   $("intro").hidden = next !== "idle";
 }
 
+// ---------- camera choice ----------
+//
+// "Automatic" asks for the back camera when receiving and the front camera when sending.
+// With more than one camera on the device a list appears, and a pick there names the exact
+// device. The pick is dropped when the page changes role, because the camera that suits
+// one role is rarely the one that suits the other.
+
+let cameraId = ""; // "" means automatic
+const cameraSelect = $("camera");
+
+const pickCamera = (facing) =>
+  cameraId ? { deviceId: { exact: cameraId } } : { facingMode: facing };
+
+function activeCameraLabel() {
+  const track = (stream ?? txStream)?.getVideoTracks()[0];
+  return track?.label || "";
+}
+
+async function refreshCameras() {
+  let devices = [];
+  try {
+    devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (d) => d.kind === "videoinput",
+    );
+  } catch {
+    // No device list here. Automatic still works.
+  }
+  if (cameraId && !devices.some((d) => d.deviceId === cameraId)) cameraId = "";
+  const inUse = activeCameraLabel();
+  cameraSelect.replaceChildren(
+    new Option(inUse ? `Automatic (${inUse})` : "Automatic", ""),
+    ...devices.map(
+      (d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId),
+    ),
+  );
+  cameraSelect.value = cameraId;
+  $("camera-row").hidden = devices.length < 2;
+}
+
+// A device that was chosen and has since gone away must not keep failing.
+function forgetBadCamera(e) {
+  if (
+    cameraId &&
+    (e.name === "OverconstrainedError" || e.name === "NotFoundError")
+  ) {
+    cameraId = "";
+    refreshCameras();
+  }
+}
+
+function forgetCameraChoice() {
+  cameraId = "";
+  refreshCameras();
+}
+
+cameraSelect.onchange = () => {
+  cameraId = cameraSelect.value;
+  if (mode === "send") {
+    stopTxCamera();
+    startTxCamera();
+  } else if (stream || !result) {
+    // Same stream and decoder, new camera. A finished receiver keeps its camera off.
+    captureGen++;
+    stopCamera();
+    startReceiverCamera();
+  }
+};
+navigator.mediaDevices?.addEventListener?.("devicechange", refreshCameras);
+
 // ---------- sender ----------
 
 // A smaller frame is a smaller QR code, so every cell is larger on screen and easier for a
@@ -143,6 +212,7 @@ function enterSend() {
   if (mode === "send") return;
   captureGen++;
   stopCamera();
+  forgetCameraChoice();
   setMode("send");
 }
 
@@ -156,6 +226,7 @@ function leaveSend() {
   $("send-info").textContent = "Choose a file.";
   $("send-status").textContent = "";
   fail("");
+  forgetCameraChoice();
   setMode("idle");
   startReceiverCamera();
 }
@@ -741,7 +812,7 @@ async function startTxCamera() {
     txStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        facingMode: "user",
+        ...pickCamera("user"),
         width: { ideal: 960 },
         height: { ideal: 720 },
         frameRate: { ideal: 15 },
@@ -751,12 +822,14 @@ async function startTxCamera() {
     await txVideo.play();
   } catch (e) {
     stopTxCamera();
+    forgetBadCamera(e);
     fail(cameraError(e));
     return;
   } finally {
     txStarting = false;
   }
   txPool.resize(1);
+  refreshCameras();
   txScan(++txGen);
 }
 
@@ -1070,7 +1143,7 @@ function stopCamera() {
 // 60 fps with 30. The retry takes whatever the camera can give.
 async function acquireCamera() {
   const base = {
-    facingMode: "environment",
+    ...pickCamera("environment"),
     width: { ideal: 1280 },
     height: { ideal: 960 },
   };
@@ -1124,6 +1197,7 @@ async function startReceiverCamera() {
     await video.play();
   } catch (e) {
     stopCamera();
+    forgetBadCamera(e);
     $("rx-error").textContent = cameraError(e);
     return;
   } finally {
@@ -1136,6 +1210,7 @@ async function startReceiverCamera() {
   }
   done = false;
   pool.resize(WORKERS);
+  refreshCameras(); // device names appear only after permission is granted
   keepAwake();
   captureGen++;
   schedule(captureGen);
