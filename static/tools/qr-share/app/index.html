@@ -21,6 +21,11 @@
 
     <section id="send">
       <label>File <input id="file" type="file" /></label>
+      <!-- The code sits right under the file picker so it is on screen without scrolling. -->
+      <div class="shown">
+        <canvas id="code" hidden></canvas>
+        <div id="osd" class="osd"></div>
+      </div>
       <div class="row">
         <label
           >Bytes per frame
@@ -36,14 +41,10 @@
         </label>
         <label
           >Frames per second
-          <input id="fps" type="number" min="1" max="60" value="10"
+          <input id="fps" type="number" min="1" max="60" value="20"
         /></label>
       </div>
       <p id="send-info" class="dim">Choose a file.</p>
-      <div class="shown">
-        <canvas id="code" hidden></canvas>
-        <div id="osd" class="osd"></div>
-      </div>
       <p class="dim">
         Click the code to show it full screen. Keys: Space pauses and resumes.
         Left and Right step one frame while paused. Up and Down change the speed
@@ -75,6 +76,15 @@
       <button id="cam" type="button">Start camera</button>
       <button id="reset" type="button">Reset</button>
       <div class="video"><video id="video" muted playsinline></video></div>
+      <div id="zoom-row" class="row" hidden>
+        <label
+          >Zoom <span id="zoom-value">1.0x</span>
+          <input id="zoom" type="range" min="1" max="1" step="0.1" value="1"
+        /></label>
+      </div>
+      <p id="zoom-note" class="dim" hidden>
+        This camera does not offer zoom in this browser. Move closer instead.
+      </p>
       <p id="rx-status">Camera is off.</p>
       <p id="rx-rate"></p>
       <pre id="rx-stats" class="dim"></pre>

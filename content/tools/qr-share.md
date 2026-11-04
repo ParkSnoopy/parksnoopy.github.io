@@ -14,8 +14,9 @@ The page makes no network requests after it has loaded, so you can turn the netw
 ## How to use it
 
 1. Open the tool on both devices. Pick Send on one and Receive on the other.
-2. On the sender, choose a file. Pick the bytes per frame and how many codes to show at once. The defaults are 2,331 bytes, four codes, and 10 frames per second.
-3. On the receiver, press Start camera and point it at the sender.
+2. On the sender, choose a file. Pick the bytes per frame and how many codes to show at once. The defaults are 2,331 bytes, four codes, and 20 frames per second.
+   As soon as the file is ready, the sender shows one META code under the picker. It carries the file name and size and no data.
+3. On the receiver, press Start camera and point it at the META code. The receiver shows the file name once it has read it, so you know the aim is good. If the sender is far away, use the Zoom slider under the picture or pinch the picture. Zoom is the camera's own, so it only appears where the browser offers it. Most Android phones do. iPhones and most laptop cameras do not.
 4. On the sender, press Start transfer. Click the code to show it full screen.
    In full screen the keys still work. Space pauses and resumes. Left and Right step one frame while paused. Up and Down change the speed by 5 fps. A line in the corner shows the state.
 5. Keep both devices still. The receiver shows its progress and the transfer rate.

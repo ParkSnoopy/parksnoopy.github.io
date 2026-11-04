@@ -30,7 +30,9 @@ import {
   findGaps,
   formatRanges,
   packFin,
+  packMeta,
   parseFin,
+  parseMeta,
   parseRanges,
   rangeFrames,
 } from "./fin.js";
@@ -79,7 +81,7 @@ for (const n of FRAME_BYTES) {
   $("bytes").append(option);
 }
 
-const FPS = { min: 1, max: 60, fallback: 10 };
+const FPS = { min: 1, max: 60, fallback: 20 };
 $("fps").min = FPS.min;
 $("fps").max = FPS.max;
 // The lower bound is enforced on change, so a number can still be typed digit by digit.
@@ -113,6 +115,7 @@ function setIdle(idle) {
 function stopRun() {
   generation++;
   live = null;
+  preview = null;
   paused = false;
   $("pause").textContent = "Pause";
   $("send-rate").textContent = "";
@@ -147,6 +150,7 @@ async function prepare() {
   }
   updateInfo();
   setIdle(true);
+  showPreview();
 }
 
 function updateInfo() {
@@ -161,7 +165,72 @@ function updateInfo() {
     `${packed.name}: ${sent}. Each frame carries ${blockLen} B of file data.`;
 }
 
+// Sizes the code canvas for a picture totalW x totalH pixels at one pixel per module. The
+// raster stays at a whole number of pixels per module and CSS stretches the rest smoothly.
+// A jagged module width is harder to read. Returns that whole number.
+function fitCanvas(totalW, totalH) {
+  const dpr = window.devicePixelRatio || 1;
+  const full = document.fullscreenElement === canvas.parentElement;
+  const budgetW = full
+    ? window.innerWidth
+    : Math.min(canvas.parentElement.clientWidth, 760);
+  const budgetH = full ? window.innerHeight : window.innerHeight * 0.85;
+  const scale = Math.max(
+    1,
+    Math.floor(Math.min((budgetW * dpr) / totalW, (budgetH * dpr) / totalH)),
+  );
+  canvas.width = totalW * scale;
+  canvas.height = totalH * scale;
+  const nativeW = (totalW * scale) / dpr;
+  const nativeH = (totalH * scale) / dpr;
+  const stretch = Math.max(1, Math.min(budgetW / nativeW, budgetH / nativeH));
+  canvas.style.width = `${nativeW * stretch}px`;
+  canvas.style.height = `${nativeH * stretch}px`;
+  return scale;
+}
+
+// One META code, up as soon as a file is ready and until Start. It carries no data. It
+// gives the person holding the receiver something to aim at, and shows what is coming.
+let preview = null; // { resize } while the META code is on screen
+function showPreview() {
+  preview = null;
+  if (!packed || live) return;
+  const blockLen = blockLength(Number($("bytes").value));
+  const k = Math.ceil(packed.container.length / blockLen);
+  const qr = createFrameQr(
+    packMeta({
+      sessionId: 0,
+      k,
+      blockLen,
+      size: packed.size,
+      name: packed.name,
+    }),
+    "L",
+  );
+  const modules = qr.modules.size;
+  const raster = rasterizeQr(modules, qr.modules.data, MARGIN);
+  const image = new ImageData(
+    new Uint8ClampedArray(raster.pixels.buffer),
+    raster.size,
+    raster.size,
+  );
+  const draw = () => {
+    const scale = fitCanvas(raster.size, raster.size);
+    staging.width = staging.height = raster.size;
+    staging.getContext("2d").putImageData(image, 0, 0);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(staging, 0, 0, raster.size * scale, raster.size * scale);
+  };
+  canvas.hidden = false;
+  draw();
+  preview = { resize: draw };
+  $("send-status").textContent =
+    "This code names the file. Aim the receiver's camera at it, then press Start transfer.";
+}
+
 function startStream() {
+  preview = null;
   const gen = ++generation;
   const frameBytes = Number($("bytes").value);
   const codes = Number($("codes").value);
@@ -261,28 +330,12 @@ function startStream() {
   // Fits the code to the space it has. The raster stays at a whole number of pixels per
   // module and CSS stretches the rest smoothly. A jagged module width is harder to read.
   const sizeCanvas = () => {
-    const dpr = window.devicePixelRatio || 1;
     const cell = modules + 2 * MARGIN;
     const totalW = cell * cols;
     const totalH = cell * rows;
-    const full = document.fullscreenElement === canvas.parentElement;
-    const budgetW = full
-      ? window.innerWidth
-      : Math.min(canvas.parentElement.clientWidth, 760);
-    const budgetH = full ? window.innerHeight : window.innerHeight * 0.85;
-    scale = Math.max(
-      1,
-      Math.floor(Math.min((budgetW * dpr) / totalW, (budgetH * dpr) / totalH)),
-    );
+    scale = fitCanvas(totalW, totalH);
     staging.width = totalW;
     staging.height = totalH;
-    canvas.width = totalW * scale;
-    canvas.height = totalH * scale;
-    const nativeW = (totalW * scale) / dpr;
-    const nativeH = (totalH * scale) / dpr;
-    const stretch = Math.max(1, Math.min(budgetW / nativeW, budgetH / nativeH));
-    canvas.style.width = `${nativeW * stretch}px`;
-    canvas.style.height = `${nativeH * stretch}px`;
     const sctx = staging.getContext("2d");
     cells.forEach((img, i) => {
       if (img)
@@ -437,8 +490,10 @@ setInterval(() => {
     `Transfer rate: ${fmtRate(perSecond * live.blockLen)} (${perSecond} frames/s)`;
 }, 500);
 
-window.addEventListener("resize", () => live?.resize());
-document.addEventListener("fullscreenchange", () => live?.resize());
+window.addEventListener("resize", () => (live ?? preview)?.resize());
+document.addEventListener("fullscreenchange", () =>
+  (live ?? preview)?.resize(),
+);
 canvas.onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else canvas.parentElement.requestFullscreen?.();
@@ -447,8 +502,9 @@ canvas.onclick = () => {
 $("file").onchange = prepare;
 $("bytes").onchange = $("codes").onchange = () => {
   if (live) stopRun();
-  updateInfo();
   $("send-status").textContent = "";
+  updateInfo();
+  showPreview();
 };
 $("fps").onchange = () => {
   $("fps").value = fps();
@@ -457,7 +513,10 @@ $("fps").onchange = () => {
 $("start").onclick = () => {
   fail("");
   paused = false;
-  if (!startStream()) return;
+  if (!startStream()) {
+    showPreview();
+    return;
+  }
   keepAwake();
   $("send-rate").textContent = "Transfer rate: measuring...";
   $("send-status").textContent =
@@ -530,8 +589,9 @@ $("replay").addEventListener("keydown", (e) => {
 
 $("reset-send").onclick = () => {
   stopRun();
-  $("send-status").textContent = "Stopped. Press Start transfer to send again.";
   updateInfo();
+  showPreview();
+  $("send-status").textContent = "Stopped. Press Start transfer to send again.";
 };
 
 // ---------- receiver ----------
@@ -572,6 +632,7 @@ let expectedAt = 0;
 let frameId = 0;
 let verdict = "";
 let finSeen = false; // a FIN code of this stream was read, so the missing runs are shown
+let incoming = null; // the META code read before any data: { k, blockLen, size, name }
 const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
 let shown = { ...stats };
 let rateWindow = []; // [time, payload bytes] for every useful frame
@@ -716,6 +777,15 @@ function onDecoded(bytes, box, info) {
   stats.decoded++;
   if (info?.tracked) stats.tracked++;
   if (box) noteRegion(box, performance.now(), true, info);
+  const meta = parseMeta(bytes);
+  if (meta) {
+    // The sender is showing what it will send. This only helps with aiming.
+    if (!decoder) {
+      incoming = meta;
+      requestRender();
+    }
+    return;
+  }
   const fin = parseFin(bytes);
   if (fin) {
     // The sender finished a sweep. Only the stream being received counts.
@@ -749,6 +819,7 @@ function onDecoded(bytes, box, info) {
       header.totalLen,
     );
     streamKey = key;
+    incoming = null;
     finSeen = false;
     startedAt = performance.now();
     rateWindow = [];
@@ -796,6 +867,90 @@ function stopCamera() {
   video.srcObject = null;
   pool.resize(0);
   regions = [];
+  setupZoom();
+}
+
+// ---------- zoom ----------
+//
+// Zoom is the camera's own, as in a camera app: the sensor reads a smaller part of the
+// scene, so a distant code gets more pixels. A zoomed-in picture of the same size would
+// not help the decoder, so where the browser offers no zoom the control stays hidden.
+// Pinching the picture zooms too. The level survives a camera restart.
+
+let zoomLevel = 1;
+let zoomRange = null; // { min, max, step } when the camera can zoom
+let zoomWant = null;
+let zoomBusy = false;
+
+function setupZoom() {
+  const track = stream?.getVideoTracks()[0];
+  const caps = track?.getCapabilities?.().zoom;
+  zoomRange = caps && caps.max > caps.min ? caps : null;
+  $("zoom-row").hidden = !zoomRange;
+  $("zoom-note").hidden = !(track && !zoomRange);
+  $("video").parentElement.classList.toggle("zoomable", !!zoomRange);
+  if (!zoomRange) return;
+  const slider = $("zoom");
+  slider.min = zoomRange.min;
+  slider.max = zoomRange.max;
+  slider.step = zoomRange.step || 0.1;
+  setZoom(zoomLevel);
+}
+
+async function setZoom(level) {
+  if (!zoomRange) return;
+  zoomLevel = clamp(level, zoomRange.min, zoomRange.max, zoomRange.min);
+  $("zoom").value = zoomLevel;
+  $("zoom-value").textContent = `${zoomLevel.toFixed(1)}x`;
+  zoomWant = zoomLevel;
+  if (zoomBusy) return; // the running call picks up the newest level when it finishes
+  zoomBusy = true;
+  try {
+    while (zoomWant !== null && stream) {
+      const want = zoomWant;
+      zoomWant = null;
+      await stream
+        .getVideoTracks()[0]
+        .applyConstraints({ advanced: [{ zoom: want }] });
+      // Boxes found at the old zoom no longer point at the codes.
+      regions = [];
+    }
+  } catch (e) {
+    $("rx-error").textContent = `Zoom failed: ${e.name}`;
+  } finally {
+    zoomBusy = false;
+    zoomWant = null;
+  }
+}
+
+$("zoom").addEventListener("input", () => setZoom(Number($("zoom").value)));
+
+{
+  const picture = $("video").parentElement;
+  const fingers = new Map();
+  let pinch = null; // { distance, level } when two fingers are down
+  const spread = () => {
+    const [a, b] = [...fingers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+  };
+  picture.addEventListener("pointerdown", (e) => {
+    if (!zoomRange) return;
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    picture.setPointerCapture?.(e.pointerId);
+    if (fingers.size === 2) pinch = { distance: spread(), level: zoomLevel };
+  });
+  picture.addEventListener("pointermove", (e) => {
+    if (!fingers.has(e.pointerId)) return;
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && fingers.size === 2)
+      setZoom((pinch.level * spread()) / pinch.distance);
+  });
+  const lift = (e) => {
+    fingers.delete(e.pointerId);
+    if (fingers.size < 2) pinch = null;
+  };
+  picture.addEventListener("pointerup", lift);
+  picture.addEventListener("pointercancel", lift);
 }
 
 // Frame rate is demanded exactly first, because some phones answer a polite request for
@@ -854,6 +1009,7 @@ $("cam").onclick = async () => {
   }
   done = false;
   pool.resize(WORKERS);
+  setupZoom();
   keepAwake();
   captureGen++;
   schedule(captureGen);
@@ -869,6 +1025,7 @@ $("reset").onclick = () => {
   rateWindow = [];
   verdict = "";
   finSeen = false;
+  incoming = null;
   startedAt = 0;
   $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
@@ -926,6 +1083,9 @@ function render() {
   let status = "Camera is off.";
   if (result) status = "Done. The file is rebuilt and its SHA-256 matches.";
   else if (decoder) status = "Receiving...";
+  else if (incoming)
+    status =
+      "Found the sender. Keep it in view and press Start transfer on it.";
   else if (stream) status = "Point the camera at the code on the sender.";
   $("rx-status").textContent = status;
 
@@ -945,6 +1105,9 @@ function render() {
     );
     $("rx-info").textContent =
       `Progress: ${Math.floor(estimate.fraction * 100)}%\nBlocks solved: ${decoder.solvedCount} of ${decoder.k}\nFrames used: ${useful}`;
+  } else if (incoming) {
+    $("rx-info").textContent =
+      `File: ${incoming.name}\nSize: ${fmtBytes(incoming.size)}`;
   } else {
     $("rx-info").textContent = "";
   }

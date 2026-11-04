@@ -159,6 +159,10 @@ label select {
 .shown:fullscreen .osd.on {
   display: block;
 }
+/* With zoom on offer, two fingers on the picture pinch it, so the page must not take them. */
+.video.zoomable {
+  touch-action: none;
+}
 video {
   width: 100%;
   max-height: 60vh;

@@ -5,7 +5,9 @@ import {
   findGaps,
   formatRanges,
   packFin,
+  packMeta,
   parseFin,
+  parseMeta,
   parseRanges,
   rangeFrames,
 } from "../static/tools/qr-share/app/fin.js";
@@ -147,4 +149,29 @@ test("replaying the gaps a FIN code reports finishes the file sooner than waitin
   console.log(
     `k=${replay.k}: wait for repair frames=${waiting.sent}, replay gaps=${replay.sent}`,
   );
+});
+
+test("a META code names the file and is not a FIN or a frame", () => {
+  const meta = {
+    sessionId: 0,
+    k: 727,
+    blockLen: 2309,
+    size: 1048576,
+    name: "report.pdf",
+  };
+  const bytes = packMeta(meta);
+  assert.deepEqual(parseMeta(bytes), meta);
+  assert.equal(parseFin(bytes), null);
+  assert.deepEqual(classifyFrame(bytes), { kind: "foreign" });
+  assert.equal(parseMeta(packFin({ sessionId: 1, k: 2, sweeps: 1 })), null);
+});
+
+test("a long non-Latin file name is cut on a character boundary", () => {
+  const name = `${"보고서".repeat(30)}.pdf`;
+  const meta = parseMeta(
+    packMeta({ sessionId: 0, k: 2, blockLen: 100, size: 5, name }),
+  );
+  assert.ok(name.startsWith(meta.name));
+  assert.ok(new TextEncoder().encode(meta.name).length <= 60);
+  assert.ok(!meta.name.includes("\uFFFD"));
 });
