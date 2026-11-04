@@ -49,7 +49,7 @@ let tx = null;
 let payload = 0; // bytes of code data per frame in the current mode
 let encoded = false;
 let paused = false;
-let sendStart = 0;
+
 let sendPart = 1;
 let sendParts = 1;
 
@@ -57,9 +57,7 @@ function partStatus() {
   const label = sendPart
     ? `Part ${sendPart} of ${sendParts}`
     : "File information";
-  return sendPart === sendParts
-    ? `${label}. Keep sending until the receiver says Done.`
-    : `${label}. Advance when the receiver confirms.`;
+  return `${label}. Keep sending until the receiver says Done.`;
 }
 
 function updateInfo() {
@@ -120,20 +118,15 @@ function startSender() {
         payload = data.payload;
         sendPart = data.part;
         sendParts = data.parts;
-        $("previous-part").hidden = $("next-part").hidden = sendParts === 1;
-        $("previous-part").disabled = sendPart === 0;
-        $("next-part").disabled = sendPart === sendParts;
         updateInfo();
-        $("send-status").textContent =
-          sendParts > 1
-            ? partStatus()
-            : "Ready. Press Start transfer when the receiver is ready.";
+        $("send-status").textContent = data.running
+          ? partStatus()
+          : "File information ready. Press Start transfer when the receiver is ready.";
         setIdle(!data.running);
         break;
       case "encoding":
         encoded = false;
-        $("start").disabled = $("pause").disabled = true;
-        $("previous-part").disabled = $("next-part").disabled = true;
+        $("start").disabled = true;
         $("send-status").textContent = data.part
           ? `Encoding part ${data.part} of ${data.parts}...`
           : "Encoding file information...";
@@ -142,10 +135,7 @@ function startSender() {
         if (paused) break;
         $("send-rate").textContent =
           `Transfer rate: ${fmtRate(data.fps * payload)} (${data.fps} frames/s)`;
-        $("send-status").textContent =
-          sendParts > 1
-            ? partStatus()
-            : `Sending for ${Math.round((performance.now() - sendStart) / 1000)} s. Press Reset when the receiver says Done.`;
+        $("send-status").textContent = partStatus();
         break;
       case "error":
         $("send-error").textContent = data.message;
@@ -167,8 +157,7 @@ function prepare() {
   $("send-error").textContent = "";
   $("send-status").textContent = "";
   $("send-info").textContent = "Compressing and encoding...";
-  $("previous-part").hidden = $("next-part").hidden = true;
-  tx.postMessage({ type: "file", file });
+  tx.postMessage({ type: "file", file, fps: fps() });
 }
 
 $("code").onclick = () => {
@@ -188,7 +177,7 @@ $("fps").onchange = () => {
 $("start").onclick = () => {
   $("send-error").textContent = "";
   paused = false;
-  sendStart = performance.now();
+
   $("send-rate").textContent = "Transfer rate: measuring...";
   setIdle(false);
   tx.postMessage({ type: "play", fps: fps() });
@@ -208,11 +197,6 @@ $("reset-send").onclick = () => {
   stopRun();
   $("send-status").textContent = "Stopped. Press Start transfer to send again.";
 };
-
-$("previous-part").onclick = () =>
-  tx.postMessage({ type: "part", index: sendPart - 2 });
-$("next-part").onclick = () =>
-  tx.postMessage({ type: "part", index: sendPart });
 
 startSender();
 
@@ -255,10 +239,11 @@ async function receivePart(data) {
       typeof info.name !== "string" ||
       !info.name ||
       !Number.isSafeInteger(info.size) ||
+      info.size < 0 ||
       !Number.isInteger(info.count) ||
-      info.count < 2 ||
+      info.count < 1 ||
       info.count > 120 ||
-      info.count !== Math.ceil(info.size / (10 * 1024 * 1024))
+      info.count !== Math.max(1, Math.ceil(info.size / (10 * 1024 * 1024)))
     )
       throw new Error("Invalid transfer information.");
     if (
@@ -278,8 +263,7 @@ async function receivePart(data) {
       parts: Array(info.count).fill(null),
     };
     progress = 0;
-    partNotice =
-      "File information received. Advance the sender to the first part.";
+    partNotice = "File information received. Waiting for file data.";
     render();
     return null;
   }
@@ -301,9 +285,9 @@ async function receivePart(data) {
   const partSize = 10 * 1024 * 1024;
   if (
     !Number.isSafeInteger(size) ||
-    count < 2 ||
+    count < 1 ||
     count > 120 ||
-    count !== Math.ceil(size / partSize) ||
+    count !== Math.max(1, Math.ceil(size / partSize)) ||
     index >= count ||
     data.blob.size !== Math.min(partSize, size - index * partSize)
   )
@@ -336,7 +320,7 @@ async function receivePart(data) {
   const have = receivedParts.parts.filter(Boolean).length;
   if (have !== count) {
     progress = 0;
-    partNotice = `Part ${index + 1} received. Advance the sender to the next part.`;
+    partNotice = `Part ${index + 1} received.`;
     render();
     return null;
   }
@@ -378,7 +362,8 @@ function startSink() {
         break;
       case "done": {
         try {
-          result = await receivePart(data);
+          const completed = await receivePart(data);
+          if (completed) result = completed;
         } catch (e) {
           $("rx-error").textContent = e.message;
           break;

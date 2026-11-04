@@ -1,6 +1,6 @@
 // Encodes a file with libcimbar and draws the animated code on an OffscreenCanvas.
 // Compression, encoding and drawing all run here, so the page never blocks.
-// In:  init { canvas }, mode { mode }, file { file }, play { fps }, fps { fps },
+// In:  init { canvas }, mode { mode }, file { file, fps }, play { fps }, fps { fps },
 //      pause, resume, stop.
 // Out: ready { modes }, mode { payload }, encoded, stats { fps }, error { message }.
 
@@ -49,6 +49,9 @@
   let part = 0;
   let parts = 0;
   let transferId = "";
+  let idBase = 0;
+  let frameLimit = 0;
+  let round = 0;
 
   // The page shows this canvas through a placeholder, which needs the real proportions.
   const ratio = () => self.Module.canvas.width / self.Module.canvas.height;
@@ -84,8 +87,25 @@
   // Returns false when a newer file replaced this one.
   async function encodeFile(file, token) {
     const chunk = lib._cimbare_encode_bufsize() * 16;
+    let estimate = file.size;
+    if (part >= 0 && typeof CompressionStream !== "undefined") {
+      estimate = 0;
+      const reader = file
+        .stream()
+        .pipeThrough(new CompressionStream("deflate"))
+        .getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (token !== generation) {
+          await reader.cancel();
+          return false;
+        }
+        if (done) break;
+        estimate += value.byteLength;
+      }
+    }
     let name = part < 0 ? "cimbar-info-v1" : source.name;
-    if (parts > 1 && part >= 0) {
+    if (part >= 0) {
       const hash = new Uint8Array(
         await crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
       );
@@ -105,7 +125,11 @@
       throw new Error("The file name is too long to transfer.");
     const namePtr = lib._malloc(Math.max(1, name.length));
     lib.HEAPU8.set(name, namePtr);
-    const res = lib._cimbare_init_encode(namePtr, name.length, -1);
+    const res = lib._cimbare_init_encode(
+      namePtr,
+      name.length,
+      (idBase + part + 1) % 128,
+    );
     lib._free(namePtr);
     if (res < 0) throw new Error(`The encoder could not start (code ${res}).`);
 
@@ -129,17 +153,22 @@
       lib._free(ptr);
     }
     encoded = true;
+    // Deflate estimates zstd size; each pass increases redundancy up to the raw-size bound.
+    const budget = Math.min(
+      file.size * 1.8,
+      estimate * 2.4 * 2 ** Math.min(round, 20),
+    );
+    frameLimit = Math.max(90, Math.ceil(budget / lib._cimbard_get_bufsize()));
     return true;
   }
 
   // ---------- playing ----------
 
-  // The running pass: { fps, due, paused } while frames play, null otherwise.
+  // The running pass retains playback and encoding state until stopped.
   let run = null;
   let raf = 0;
   let statsTimer = 0;
   let shownAt = [];
-  let playbackGeneration = 0;
 
   function showFrame(now) {
     if (lib._cimbare_render() === 1) shownAt.push(now);
@@ -150,12 +179,16 @@
   // number of refreshes. A timer would give uneven frame times and torn camera images.
   function tick(now) {
     raf = 0;
-    if (!run || run.paused) return;
+    if (!run || run.paused || run.encoding) return;
     const gap = 1000 / run.fps; // read each time, so a speed change applies at once
     if (run.due === 0) run.due = now;
     if (now + 4 >= run.due) {
       showFrame(now);
       run.due = now - run.due > gap ? now + gap : run.due + gap;
+      if (!run.preview && ++run.frames >= frameLimit) {
+        advance();
+        return;
+      }
     }
     raf = nextFrame(tick);
   }
@@ -167,7 +200,6 @@
   }
 
   function stop() {
-    playbackGeneration++;
     run = null;
     if (raf && typeof self.cancelAnimationFrame === "function")
       self.cancelAnimationFrame(raf);
@@ -175,6 +207,50 @@
     clearInterval(statsTimer);
     statsTimer = 0;
     shownAt = [];
+  }
+
+  function partBlob() {
+    return part < 0
+      ? new Blob([
+          JSON.stringify({
+            id: transferId,
+            name: source.name,
+            size: source.size,
+            count: parts,
+          }),
+        ])
+      : source.slice(part * PART_SIZE, (part + 1) * PART_SIZE, source.type);
+  }
+
+  async function advance() {
+    const current = run;
+    current.encoding = true;
+    if (part + 1 >= parts) round++;
+    part = part + 1 >= parts ? -1 : part + 1;
+    self.postMessage({ type: "encoding", part: part + 1, parts });
+    const token = ++generation;
+    try {
+      if (!(await encodeFile(partBlob(), token))) return;
+      const running = run === current;
+      self.postMessage({
+        type: "encoded",
+        payload: lib._cimbard_get_bufsize(),
+        part: part + 1,
+        parts,
+        running,
+      });
+      if (running) {
+        current.encoding = false;
+        current.frames = 0;
+        current.due = 0;
+        if (!current.paused) raf = nextFrame(tick);
+      }
+    } catch (e) {
+      if (token === generation) {
+        stop();
+        fail(e.message);
+      }
+    }
   }
 
   // ---------- messages ----------
@@ -207,79 +283,45 @@
               `The file exceeds the ${MAX_PARTS * 10} MiB transfer limit.`,
             );
           transferId = crypto.randomUUID();
-          part = parts > 1 ? -1 : 0;
-          const first =
-            part < 0
-              ? new Blob([
-                  JSON.stringify({
-                    id: transferId,
-                    name: source.name,
-                    size: source.size,
-                    count: parts,
-                  }),
-                ])
-              : source.slice(0, PART_SIZE, source.type);
-          if (await encodeFile(first, ++generation))
+          idBase = crypto.getRandomValues(new Uint8Array(1))[0] % 128;
+          round = 0;
+          part = -1;
+          if (await encodeFile(partBlob(), ++generation)) {
             self.postMessage({
               type: "encoded",
               payload: lib._cimbard_get_bufsize(),
               part: part + 1,
               parts,
             });
-          break;
-        case "part": {
-          if (
-            !source ||
-            data.index < -1 ||
-            data.index >= parts ||
-            data.index === part
-          )
-            break;
-          const wasRunning = run && !run.paused;
-          const currentFps = run?.fps;
-          stop();
-          const playbackToken = playbackGeneration;
-          encoded = false;
-          part = data.index;
-          self.postMessage({ type: "encoding", part: part + 1, parts });
-          const slice =
-            part < 0
-              ? new Blob([
-                  JSON.stringify({
-                    id: transferId,
-                    name: source.name,
-                    size: source.size,
-                    count: parts,
-                  }),
-                ])
-              : source.slice(
-                  part * PART_SIZE,
-                  (part + 1) * PART_SIZE,
-                  source.type,
-                );
-          if (await encodeFile(slice, ++generation)) {
-            const running = wasRunning && playbackToken === playbackGeneration;
-            self.postMessage({
-              type: "encoded",
-              payload: lib._cimbard_get_bufsize(),
-              part: part + 1,
-              parts,
-              running,
-            });
-            if (running) {
-              run = { fps: currentFps, due: 0, paused: false };
-              statsTimer = setInterval(reportStats, 500);
-              raf = nextFrame(tick);
-            }
+            run = {
+              fps: data.fps,
+              due: 0,
+              paused: false,
+              preview: true,
+              frames: 0,
+              encoding: false,
+            };
+            raf = nextFrame(tick);
           }
           break;
-        }
         case "play":
           if (!encoded) break;
-          stop();
-          run = { fps: data.fps, due: 0, paused: false };
+          if (!run) {
+            run = {
+              fps: data.fps,
+              due: 0,
+              paused: false,
+              preview: false,
+              frames: 0,
+              encoding: false,
+            };
+            raf = nextFrame(tick);
+          } else {
+            run.fps = data.fps;
+            run.preview = false;
+            run.frames = 0;
+          }
           statsTimer = setInterval(reportStats, 500);
-          raf = nextFrame(tick);
           break;
         case "fps":
           if (run) run.fps = data.fps;
