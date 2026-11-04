@@ -86,6 +86,64 @@ export function parseRanges(text, k) {
   return { ranges };
 }
 
+// The ACK code goes the other way. The receiver keeps one on its own screen while it
+// works, and the sender's camera reads it. It says how far the receiver has got and which
+// runs of blocks it lacks below the highest block it has seen, so the sender can replay
+// them without anyone typing. Its first byte is not the Decimen magic byte either.
+export const ACK_MAGIC = 0xf2;
+const ACK_VERSION = 1;
+const ACK_HEAD = 12;
+export const ACK_MAX_RUNS = 8;
+
+export function packAck({ sessionId, k, seq, solved, done, runs }) {
+  const used = runs.slice(0, ACK_MAX_RUNS);
+  const out = new Uint8Array(ACK_HEAD + 4 * used.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint8(0, ACK_MAGIC);
+  dv.setUint8(1, ACK_VERSION);
+  dv.setUint16(2, sessionId, true);
+  dv.setUint16(4, k, true);
+  dv.setUint16(6, seq & 0xffff, true);
+  dv.setUint16(8, solved, true);
+  dv.setUint8(10, done ? 1 : 0);
+  dv.setUint8(11, used.length);
+  used.forEach((r, i) => {
+    dv.setUint16(ACK_HEAD + 4 * i, r.start, true);
+    dv.setUint16(ACK_HEAD + 4 * i + 2, r.count, true);
+  });
+  return out;
+}
+
+// Returns null for anything that is not a well-formed ACK code of this version.
+export function parseAck(bytes) {
+  if (
+    bytes.length < ACK_HEAD ||
+    bytes[0] !== ACK_MAGIC ||
+    bytes[1] !== ACK_VERSION
+  )
+    return null;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const n = dv.getUint8(11);
+  const k = dv.getUint16(4, true);
+  if (k === 0 || n > ACK_MAX_RUNS || bytes.length !== ACK_HEAD + 4 * n)
+    return null;
+  const runs = [];
+  for (let i = 0; i < n; i++) {
+    const start = dv.getUint16(ACK_HEAD + 4 * i, true);
+    const count = dv.getUint16(ACK_HEAD + 4 * i + 2, true);
+    if (count < 1 || start + count > k) return null;
+    runs.push({ start, count });
+  }
+  return {
+    sessionId: dv.getUint16(2, true),
+    k,
+    seq: dv.getUint16(6, true),
+    solved: dv.getUint16(8, true),
+    done: dv.getUint8(10) === 1,
+    runs,
+  };
+}
+
 export function rangeFrames(ranges) {
   const frames = [];
   for (const r of ranges)

@@ -19,7 +19,8 @@ The page makes no network requests after it has loaded, so you can turn the netw
 4. On the sender, press Start transfer. Click the code to show it full screen.
    In full screen the keys still work. Space pauses and resumes. Left and Right step one frame while paused. Up and Down change the speed by 5 fps. A line in the corner shows the state.
 5. Keep both devices still. The receiver shows its progress and the transfer rate.
-6. If the camera lost a stretch, wait for the FIN code. It is a QR code that fills the screen for a second after each pass over the file. The receiver reads it and lists the runs of blocks it still lacks, longest first, such as `120/30/300/6`. Type that into the Play again field on the sender and press Replay. The sender plays those frames first, shows a FIN code again, and goes back to where it was.
+6. Both devices use their cameras. On the sender, press Start camera under the code and point it at the receiver's screen. The receiver keeps a small ACK code on its screen. It says how many blocks it has and which runs it lacks. The sender reads it while it keeps sending, plays the missing blocks in between, and stops by itself when the receiver says the file is complete. Nothing pauses for this. If the link drops, the sender keeps sending as before.
+   Without the sender's camera you can do the same by hand. Wait for the FIN code. It is a QR code that fills the screen for a second after each pass over the file. The receiver reads it and lists the runs of blocks it still lacks, longest first, such as `120/30/300/6`. Type that into the Play again field on the sender and press Replay. The sender plays those frames first, shows a FIN code again, and goes back to where it was.
 7. When the receiver says Done, it has checked the SHA-256 of the file. Press Download.
 
 ## Notes

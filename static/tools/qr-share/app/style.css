@@ -137,6 +137,14 @@ label select {
   background: #fff;
   cursor: zoom-in;
 }
+/* The ACK code is read by the other device's camera, so it keeps hard edges and a white margin. */
+#ack {
+  background: #fff;
+  image-rendering: pixelated;
+}
+#tx-video {
+  max-width: 14rem;
+}
 .shown:fullscreen {
   align-items: center;
   margin: 0;

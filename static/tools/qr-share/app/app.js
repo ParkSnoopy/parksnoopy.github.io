@@ -29,7 +29,10 @@ import {
 import {
   findGaps,
   formatRanges,
+  ACK_MAX_RUNS,
+  packAck,
   packFin,
+  parseAck,
   parseFin,
   parseRanges,
   rangeFrames,
@@ -91,6 +94,8 @@ const fps = () =>
   clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
 
 const FIN_HOLD_MS = 1000;
+const REPLAY_RETRY_MS = 3000; // a replayed block still missing after this is asked for again
+const PEER_STALE_MS = 4000; // no ACK for this long and the link counts as lost
 const LOOKAHEAD = 3; // codes made ahead per grid cell, so a flip never waits for the QR maths
 const canvas = $("code");
 const staging = document.createElement("canvas");
@@ -111,9 +116,14 @@ function setIdle(idle) {
   $("replay").disabled = $("replay-go").disabled = idle;
 }
 
+// The last ACK code the sender's camera read from the receiver's screen.
+let peer = null; // { seq, solved, k, missing, at }
+const linkAlive = () => !!peer && performance.now() - peer.at < PEER_STALE_MS;
+
 function stopRun() {
   generation++;
   live = null;
+  peer = null;
   paused = false;
   $("pause").textContent = "Pause";
   $("send-rate").textContent = "";
@@ -229,17 +239,21 @@ function startStream() {
   const makeCell = () => {
     let n;
     let replayed = false;
+    // With a live ACK link nobody needs a FIN code, and the stream never stops for one.
+    const linked = linkAlive();
     if (replay.length) {
       n = replay.shift();
       replayed = true;
-      finNext = replay.length === 0;
-    } else if (finNext) {
+      replayedAt.set(n, performance.now());
+      finNext = replay.length === 0 && !linked;
+    } else if (finNext && !linked) {
       finNext = false;
       return makeFin();
-    } else if (seq % cycle === encoder.k && finAt !== seq) {
+    } else if (seq % cycle === encoder.k && finAt !== seq && !linked) {
       finAt = seq;
       return makeFin();
     } else {
+      finNext = false;
       n = seq++;
     }
     const bytes = packFrame({ ...header, seq: n }, encoder.encode(n));
@@ -249,14 +263,35 @@ function startStream() {
   };
 
   const playAgain = (frames) => {
-    // Frames made ahead of the screen go back to the counter, then the replay goes first.
+    // Frames made ahead of the screen go back to the counter. Replays that were already
+    // made ahead are kept, in front of the new ones, so no request is lost.
+    const ahead = queue.filter((q) => q.replayed).map((q) => q.n);
     seq -= queue.filter((q) => !q.replayed && !q.fin).length;
     if (queue.some((q) => q.fin)) finAt = -1;
     queue.length = 0;
+    const merged = [...new Set([...ahead, ...replay, ...frames])];
     replay.length = 0;
-    replay.push(...frames);
+    replay.push(...merged);
     finNext = false;
     pump(LOOKAHEAD * codes);
+  };
+
+  // The receiver's ACK code asks for blocks while the stream keeps running. A block that
+  // is already queued, or was replayed a moment ago and may still be on its way, is left
+  // alone. One that is still missing after that window is asked for again.
+  const replayedAt = new Map();
+  const onAck = (ack) => {
+    const now = performance.now();
+    const pending = new Set(replay);
+    for (const q of queue) if (q.replayed) pending.add(q.n);
+    const wanted = rangeFrames(ack.runs).filter(
+      (n) =>
+        n < encoder.k &&
+        !pending.has(n) &&
+        now - (replayedAt.get(n) ?? Number.NEGATIVE_INFINITY) > REPLAY_RETRY_MS,
+    );
+    if (wanted.length) playAgain(wanted);
+    return wanted.length;
   };
 
   // Fits the code to the space it has. The raster stays at a whole number of pixels per
@@ -367,6 +402,8 @@ function startStream() {
     position: () => lastSeq,
     replayLeft: () => replay.length,
     playAgain,
+    onAck,
+    sessionId,
   };
 
   // Each cell flips at its own phase of the frame interval. A camera exposure that spans a
@@ -412,7 +449,13 @@ function startStream() {
 // The line shown over the code in full screen, and in the status line otherwise.
 function sendState() {
   const word = paused ? "Paused" : "Sending";
-  return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).`;
+  return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).${peerState()}`;
+}
+
+function peerState() {
+  if (!txStream) return "";
+  if (!linkAlive()) return " No status from the receiver yet.";
+  return ` Receiver has ${peer.solved} of ${peer.k} blocks, ${peer.missing} known missing.`;
 }
 
 let osdTimer = 0;
@@ -507,6 +550,135 @@ document.addEventListener("keydown", (e) => {
 // A tapped button must not stay highlighted, and it must not keep the Space key.
 document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
 
+// ---------- the sender's camera ----------
+//
+// The sender watches the receiver's screen while it keeps sending. Nothing waits on it.
+// Frames go to a worker, the answer comes back whenever it comes, and a missing or late
+// answer changes nothing about what is on the screen.
+
+const TX_SCAN_MS = 150;
+const txVideo = $("tx-video");
+const txGrab = document.createElement("canvas");
+let txStream = null;
+let txGen = 0;
+let txId = 0;
+let txLastSeq = -1;
+let txActedAt = 0;
+const txPool = new DecodeWorkerPool(
+  () => new Worker(new URL("./rx-worker.js", import.meta.url)),
+  (bytes) => onAckFrame(bytes),
+  () => {},
+  () => {},
+);
+
+function onAckFrame(bytes) {
+  const ack = parseAck(bytes);
+  if (!ack || !live || ack.sessionId !== live.sessionId || ack.k !== live.k)
+    return;
+  const now = performance.now();
+  // The same answer again proves the link is up. It is only acted on again after the
+  // retry window, so a replay that was lost again gets asked for once more.
+  if (
+    ack.seq === txLastSeq &&
+    linkAlive() &&
+    now - txActedAt < REPLAY_RETRY_MS
+  ) {
+    peer.at = now;
+    return;
+  }
+  txLastSeq = ack.seq;
+  txActedAt = now;
+  const missing = ack.runs.reduce((sum, r) => sum + r.count, 0);
+  peer = { seq: ack.seq, solved: ack.solved, k: ack.k, missing, at: now };
+  if (ack.done) {
+    finishSend();
+    return;
+  }
+  const asked = live.onAck(ack);
+  if (asked)
+    $("tx-peer").textContent = `Receiver asked for ${asked} blocks again.`;
+}
+
+function finishSend() {
+  stopRun();
+  stopTxCamera();
+  if (document.fullscreenElement) document.exitFullscreen();
+  $("send-status").textContent =
+    "The receiver confirmed it has the whole file. Sending stopped.";
+}
+
+function txScan(gen) {
+  if (gen !== txGen) return;
+  const vw = txVideo.videoWidth;
+  const vh = txVideo.videoHeight;
+  if (vw && vh && txPool.busyCount < txPool.size) {
+    if (txGrab.width !== vw || txGrab.height !== vh) {
+      txGrab.width = vw;
+      txGrab.height = vh;
+    }
+    const ctx = txGrab.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(txVideo, 0, 0);
+    const img = ctx.getImageData(0, 0, vw, vh);
+    txPool.submit(
+      {
+        id: txId++,
+        buf: img.data.buffer,
+        w: vw,
+        h: vh,
+        ox: 0,
+        oy: 0,
+        full: true,
+      },
+      [img.data.buffer],
+    );
+  }
+  setTimeout(() => txScan(gen), TX_SCAN_MS);
+}
+
+function stopTxCamera() {
+  txGen++;
+  for (const t of txStream?.getTracks() ?? []) t.stop();
+  txStream = null;
+  txVideo.srcObject = null;
+  txPool.resize(0);
+  txLastSeq = -1;
+  $("tx-cam").textContent = "Start camera";
+  $("tx-peer").textContent = "";
+}
+
+$("tx-cam").onclick = async () => {
+  fail("");
+  if (txStream) {
+    stopTxCamera();
+    return;
+  }
+  const blocked = insecureMessage();
+  if (blocked) {
+    fail(blocked);
+    return;
+  }
+  try {
+    txStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: "user",
+        width: { ideal: 960 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 15 },
+      },
+    });
+    txVideo.srcObject = txStream;
+    await txVideo.play();
+  } catch (e) {
+    stopTxCamera();
+    fail(cameraError(e));
+    return;
+  }
+  txPool.resize(1);
+  $("tx-cam").textContent = "Stop camera";
+  txScan(++txGen);
+};
+
 // Only digits and "/" can be typed, so a stray letter never reaches the parser.
 $("replay").addEventListener("input", () => {
   $("replay").value = $("replay").value.replace(/[^\d/]/g, "");
@@ -573,6 +745,7 @@ let expectedAt = 0;
 let frameId = 0;
 let verdict = "";
 let finSeen = false; // a FIN code of this stream was read, so the missing runs are shown
+let high = -1; // the highest block number read so far, which bounds what can be missing
 const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
 let shown = { ...stats };
 let rateWindow = []; // [time, payload bytes] for every useful frame
@@ -751,9 +924,11 @@ function onDecoded(bytes, box, info) {
     );
     streamKey = key;
     finSeen = false;
+    high = -1;
     startedAt = performance.now();
     rateWindow = [];
   }
+  if (header.seq < header.k) high = Math.max(high, header.seq);
   const before = decoder.framesNew - decoder.framesRedundant;
   decoder.addFrame(header.seq, block);
   if (decoder.framesNew - decoder.framesRedundant > before)
@@ -821,6 +996,11 @@ async function acquireCamera() {
   }
 }
 
+function insecureMessage() {
+  if (window.isSecureContext && navigator.mediaDevices?.getUserMedia) return "";
+  return `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
+}
+
 function cameraError(e) {
   switch (e.name) {
     case "NotAllowedError":
@@ -839,9 +1019,9 @@ function cameraError(e) {
 $("cam").onclick = async () => {
   $("rx-error").textContent = "";
   if (stream) return;
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    $("rx-error").textContent =
-      `The browser blocks the camera on this address (${location.origin}). Open the page over https:// or on localhost. A LAN address such as http://192.168.x.x and file:// do not work.`;
+  const blocked = insecureMessage();
+  if (blocked) {
+    $("rx-error").textContent = blocked;
     return;
   }
   try {
@@ -870,6 +1050,8 @@ $("reset").onclick = () => {
   rateWindow = [];
   verdict = "";
   finSeen = false;
+  high = -1;
+  ackKey = "";
   startedAt = 0;
   $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
@@ -912,6 +1094,62 @@ setInterval(() => {
   shown = s;
   if (decoder && !result) render();
 }, 1000);
+
+// ---------- the receiver's ACK code ----------
+//
+// The receiver keeps a small QR code on its own screen for the sender's camera. It is
+// redrawn on a timer of its own, so decoding never waits for it and it never waits for
+// decoding. It names the runs of blocks missing below the highest block seen, which are
+// blocks the sender has already shown once.
+
+const ACK_EVERY_MS = 250;
+const ACK_WIDTH_PX = 300;
+let ackSeq = 0;
+let ackKey = "";
+
+function updateAck() {
+  const wrap = $("ack-wrap");
+  if (!decoder) {
+    wrap.hidden = true;
+    return;
+  }
+  const finished = !!result;
+  const gaps = finished ? [] : findGaps(decoder.solved.slice(0, high + 1));
+  const runs = gaps.slice(0, ACK_MAX_RUNS);
+  const solved = finished ? decoder.k : decoder.solvedCount;
+  const key = `${decoder.sessionId}|${solved}|${finished}|${runs.map((r) => `${r.start}/${r.count}`)}`;
+  if (key === ackKey) return;
+  ackKey = key;
+  ackSeq = (ackSeq + 1) & 0xffff;
+  const qr = createFrameQr(
+    packAck({
+      sessionId: decoder.sessionId,
+      k: decoder.k,
+      seq: ackSeq,
+      solved,
+      done: finished,
+      runs,
+    }),
+    "L",
+    undefined,
+  );
+  const raster = rasterizeQr(qr.modules.size, qr.modules.data, MARGIN);
+  const cv = $("ack");
+  cv.width = cv.height = raster.size;
+  cv.getContext("2d").putImageData(
+    new ImageData(
+      new Uint8ClampedArray(raster.pixels.buffer),
+      raster.size,
+      raster.size,
+    ),
+    0,
+    0,
+  );
+  const px = raster.size * Math.max(1, Math.floor(ACK_WIDTH_PX / raster.size));
+  cv.style.width = cv.style.height = `${px}px`;
+  wrap.hidden = false;
+}
+setInterval(updateAck, ACK_EVERY_MS);
 
 let renderTimer = 0;
 // Redraw at most ten times a second, whatever the frame rate is.

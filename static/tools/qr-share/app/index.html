@@ -61,6 +61,15 @@
         /></label>
         <button id="replay-go" type="button" disabled>Replay</button>
       </div>
+      <div class="row">
+        <button id="tx-cam" type="button">Start camera</button>
+        <span class="dim"
+          >Watch the receiver's screen. The receiver then asks for lost blocks
+          by itself, and sending stops when it has the whole file.</span
+        >
+      </div>
+      <div class="video"><video id="tx-video" muted playsinline></video></div>
+      <p id="tx-peer" class="dim"></p>
       <p id="send-status"></p>
       <p id="send-rate"></p>
       <div class="row">
@@ -80,6 +89,12 @@
       <pre id="rx-stats" class="dim"></pre>
       <pre id="rx-info"></pre>
       <p id="rx-gaps"></p>
+      <div id="ack-wrap" hidden>
+        <p class="dim">
+          Show this code to the sender's camera. It reports what is missing.
+        </p>
+        <canvas id="ack"></canvas>
+      </div>
       <button id="download" type="button" hidden>Download</button>
       <p id="rx-error" class="error"></p>
     </section>
