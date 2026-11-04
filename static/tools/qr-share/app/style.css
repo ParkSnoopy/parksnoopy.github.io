@@ -145,6 +145,20 @@ label select {
 .shown:fullscreen #code {
   cursor: zoom-out;
 }
+/* Only shown in full screen, where it sits in a corner outside the code. */
+.osd {
+  display: none;
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+.shown:fullscreen .osd.on {
+  display: block;
+}
 video {
   width: 100%;
   max-height: 60vh;

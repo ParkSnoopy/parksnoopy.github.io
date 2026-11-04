@@ -17,14 +17,17 @@ The page makes no network requests after it has loaded, so you can turn the netw
 2. On the sender, choose a file. Pick the bytes per frame and how many codes to show at once. The defaults are 1,465 bytes, one code, and 30 frames per second.
 3. On the receiver, press Start camera and point it at the sender.
 4. On the sender, press Start transfer. Click the code to show it full screen.
+   In full screen the keys still work. Space pauses and resumes. Left and Right step one frame while paused. Up and Down change the speed by 5 fps. A line in the corner shows the state.
 5. Keep both devices still. The receiver shows its progress and the transfer rate.
-6. When the receiver says Done, it has checked the SHA-256 of the file. Press Download.
+6. If the camera lost a stretch, wait for the FIN code. It is a QR code that fills the screen for a second after each pass over the file. The receiver reads it and lists the runs of blocks it still lacks, longest first, such as `120/30/300/6`. Type that into the Play again field on the sender and press Replay. The sender plays those frames first, shows a FIN code again, and goes back to where it was.
+7. When the receiver says Done, it has checked the SHA-256 of the file. Press Download.
 
 ## Notes
 
 - The camera needs https or localhost.
 - The file is cut into blocks and mixed with a fountain code. Each frame carries a random mix of blocks, and the receiver can rebuild the file from any set of frames that is large enough. A frame the camera misses costs a little time and nothing else.
-- Because of that there is no replay step and no frame numbers to type. The sender repeats the stream until you press Reset.
+- The sender repeats the stream until you press Reset, so replay is optional. Without it the receiver waits for repair frames. Their number grows with the size of the file, not with the size of the gap, so on a file of several MiB a short loss can cost hundreds of frames. A replay costs only the missing frames.
+- A FIN code starts with a byte that Decimen does not use. A plain Decimen receiver ignores it without a message.
 - A smaller frame makes a smaller QR code. Its cells are larger on the screen, so a phone camera can tell them apart more easily. A larger frame carries more data per code but needs a sharper picture.
 - Showing two or four codes at once multiplies the data rate. Each code is smaller on the screen, so this works best with a steady camera and a large screen.
 - The sender keeps each frame on screen for a whole frame interval and flips the codes in a grid one after the other. A camera exposure that spans a flip then catches at most one code half changed.

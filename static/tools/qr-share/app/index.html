@@ -40,7 +40,27 @@
         /></label>
       </div>
       <p id="send-info" class="dim">Choose a file.</p>
-      <div class="shown"><canvas id="code" hidden></canvas></div>
+      <div class="shown">
+        <canvas id="code" hidden></canvas>
+        <div id="osd" class="osd"></div>
+      </div>
+      <p class="dim">
+        Click the code to show it full screen. Keys: Space pauses and resumes.
+        Left and Right step one frame while paused. Up and Down change the speed
+        by 5 fps.
+      </p>
+      <div class="row">
+        <label
+          >Play again (start/count pairs, such as 120/30/300/6)
+          <input
+            id="replay"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            disabled
+        /></label>
+        <button id="replay-go" type="button" disabled>Replay</button>
+      </div>
       <p id="send-status"></p>
       <p id="send-rate"></p>
       <div class="row">
@@ -59,6 +79,7 @@
       <p id="rx-rate"></p>
       <pre id="rx-stats" class="dim"></pre>
       <pre id="rx-info"></pre>
+      <p id="rx-gaps"></p>
       <button id="download" type="button" hidden>Download</button>
       <p id="rx-error" class="error"></p>
     </section>

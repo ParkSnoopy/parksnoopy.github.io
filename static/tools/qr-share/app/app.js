@@ -11,6 +11,7 @@ import {
   blockLength,
   classifyFrame,
   createFrameQr,
+  cycleLength,
   estimateTransferProgress,
   fitsInOneStream,
   fnv1a,
@@ -25,6 +26,14 @@ import {
   unpackFile,
   verifyFile,
 } from "./vendor/decimen-core.js";
+import {
+  findGaps,
+  formatRanges,
+  packFin,
+  parseFin,
+  parseRanges,
+  rangeFrames,
+} from "./fin.js";
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi, fallback) =>
@@ -81,6 +90,7 @@ $("fps").addEventListener("input", () => {
 const fps = () =>
   clamp(parseInt($("fps").value, 10), FPS.min, FPS.max, FPS.fallback);
 
+const FIN_HOLD_MS = 1000;
 const LOOKAHEAD = 3; // codes made ahead per grid cell, so a flip never waits for the QR maths
 const canvas = $("code");
 const staging = document.createElement("canvas");
@@ -98,6 +108,7 @@ function fail(message) {
 function setIdle(idle) {
   $("start").disabled = !idle || !packed;
   $("pause").disabled = $("reset-send").disabled = idle;
+  $("replay").disabled = $("replay-go").disabled = idle;
 }
 
 function stopRun() {
@@ -182,11 +193,12 @@ function startStream() {
   const cells = Array(codes).fill(null); // last image per grid cell, for repainting
   const queue = [];
 
-  const makeCell = () => {
-    const bytes = packFrame({ ...header, seq }, encoder.encode(seq));
-    seq++;
-    const qr = createFrameQr(bytes, "L", version);
-    version ??= qr.version;
+  const cycle = cycleLength(encoder.k);
+  const replay = []; // frame numbers the user asked to play again, played before anything else
+  let finAt = -1; // the sequential position a FIN code was last made for
+  let finNext = false; // a replay just ended, so show a FIN code to report what is left
+
+  const toImage = (qr) => {
     modules = qr.modules.size;
     const raster = rasterizeQr(modules, qr.modules.data, MARGIN);
     return new ImageData(
@@ -194,6 +206,57 @@ function startStream() {
       raster.size,
       raster.size,
     );
+  };
+
+  // A FIN code goes up after every sweep of the file and after every replay. It is a QR
+  // code of the same size as the others, so the grid does not change shape.
+  const makeFin = () => ({
+    n: -1,
+    fin: true,
+    img: toImage(
+      createFrameQr(
+        packFin({
+          sessionId,
+          k: encoder.k,
+          sweeps: Math.floor(seq / cycle) + 1,
+        }),
+        "L",
+        version,
+      ),
+    ),
+  });
+
+  const makeCell = () => {
+    let n;
+    let replayed = false;
+    if (replay.length) {
+      n = replay.shift();
+      replayed = true;
+      finNext = replay.length === 0;
+    } else if (finNext) {
+      finNext = false;
+      return makeFin();
+    } else if (seq % cycle === encoder.k && finAt !== seq) {
+      finAt = seq;
+      return makeFin();
+    } else {
+      n = seq++;
+    }
+    const bytes = packFrame({ ...header, seq: n }, encoder.encode(n));
+    const qr = createFrameQr(bytes, "L", version);
+    version ??= qr.version;
+    return { n, replayed, img: toImage(qr) };
+  };
+
+  const playAgain = (frames) => {
+    // Frames made ahead of the screen go back to the counter, then the replay goes first.
+    seq -= queue.filter((q) => !q.replayed && !q.fin).length;
+    if (queue.some((q) => q.fin)) finAt = -1;
+    queue.length = 0;
+    replay.length = 0;
+    replay.push(...frames);
+    finNext = false;
+    pump(LOOKAHEAD * codes);
   };
 
   // Fits the code to the space it has. The raster stays at a whole number of pixels per
@@ -244,11 +307,70 @@ function startStream() {
   canvas.hidden = false;
   sizeCanvas();
   const flips = [];
-  live = { resize: sizeCanvas, flips, codes, blockLen };
+  let cursor = 0;
+  let lastSeq = -1; // the frame that went on screen last
+
+  const paint = (index, item) => {
+    const cell = modules + 2 * MARGIN;
+    const cx = (index % cols) * cell;
+    const cy = Math.floor(index / cols) * cell;
+    cells[index] = item.img;
+    if (!item.fin) lastSeq = item.n;
+    staging.getContext("2d").putImageData(item.img, cx, cy);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      staging,
+      cx,
+      cy,
+      cell,
+      cell,
+      cx * scale,
+      cy * scale,
+      cell * scale,
+      cell * scale,
+    );
+  };
+
+  // Puts one whole screen of frames up at once, starting at frame `start`.
+  const show = (start) => {
+    seq = Math.max(0, start);
+    queue.length = 0;
+    replay.length = 0;
+    finNext = false;
+    for (let i = 0; i < codes; i++) {
+      const item = makeCell();
+      if (item.fin) {
+        paintAll(item);
+        break;
+      }
+      paint(i, item);
+    }
+    cursor = 0;
+    pump(LOOKAHEAD * codes);
+  };
+  // The FIN code fills every cell, so a camera that sees any one of them can read it.
+  const paintAll = (item) => {
+    for (let i = 0; i < codes; i++) paint(i, item);
+  };
+  // Steps by one screen. A frame is one code, so a grid steps by as many frames as it shows.
+  const step = (direction) =>
+    show(direction > 0 ? lastSeq + 1 : lastSeq - 2 * codes + 1);
+
+  live = {
+    resize: sizeCanvas,
+    step,
+    flips,
+    codes,
+    blockLen,
+    k: encoder.k,
+    position: () => lastSeq,
+    replayLeft: () => replay.length,
+    playAgain,
+  };
 
   // Each cell flips at its own phase of the frame interval. A camera exposure that spans a
   // flip then catches at most one code half changed, not all of them at once.
-  let cursor = 0;
   let nextAt = performance.now();
   const tick = (now) => {
     if (gen !== generation) return;
@@ -262,30 +384,20 @@ function startStream() {
     if (now < nextAt) return;
     if (now - nextAt > interval) nextAt = now; // after a stall, do not burst out old frames
     while (now >= nextAt) {
-      const img = queue.shift();
+      const item = queue.shift();
       pump(1);
-      if (!img) {
+      if (!item) {
         nextAt = now + sub;
         break;
       }
-      const cell = modules + 2 * MARGIN;
-      const cx = (cursor % cols) * cell;
-      const cy = Math.floor(cursor / cols) * cell;
-      cells[cursor] = img;
-      staging.getContext("2d").putImageData(img, cx, cy);
-      const ctx = canvas.getContext("2d");
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(
-        staging,
-        cx,
-        cy,
-        cell,
-        cell,
-        cx * scale,
-        cy * scale,
-        cell * scale,
-        cell * scale,
-      );
+      if (item.fin) {
+        // Hold it long enough for the camera to catch it, then go on.
+        paintAll(item);
+        cursor = 0;
+        nextAt = now + Math.max(FIN_HOLD_MS, 2 * interval);
+        break;
+      }
+      paint(cursor, item);
       flips.push(now);
       cursor = (cursor + 1) % codes;
       nextAt += sub;
@@ -297,8 +409,28 @@ function startStream() {
   return true;
 }
 
+// The line shown over the code in full screen, and in the status line otherwise.
+function sendState() {
+  const word = paused ? "Paused" : "Sending";
+  return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).`;
+}
+
+let osdTimer = 0;
+// In full screen the page controls are out of reach, so the keys report back on the code.
+function showOsd() {
+  $("osd").textContent = sendState();
+  $("osd").classList.add("on");
+  clearTimeout(osdTimer);
+  if (!paused)
+    osdTimer = setTimeout(() => $("osd").classList.remove("on"), 2000);
+}
+
 setInterval(() => {
-  if (!live || paused) return;
+  if (!live) return;
+  const left = live.replayLeft();
+  $("send-status").textContent =
+    `${sendState()}${left ? ` Replaying, ${left} frames to go.` : ""} The stream repeats until you press Reset.`;
+  if (paused) return;
   const now = performance.now();
   while (live.flips.length && now - live.flips[0] > 1000) live.flips.shift();
   const perSecond = live.flips.length;
@@ -334,11 +466,68 @@ $("start").onclick = () => {
   setIdle(false);
 };
 
-$("pause").onclick = () => {
-  paused = !paused;
+function setPaused(value) {
+  paused = value;
   $("pause").textContent = paused ? "Resume" : "Pause";
   if (paused) $("send-rate").textContent = "Transfer rate: paused";
-};
+}
+$("pause").onclick = () => setPaused(!paused);
+
+// Keys work in full screen too, where the buttons cannot be reached. Space pauses and
+// resumes. Left and Right step one frame while paused. Up and Down change the speed.
+const FPS_STEP = 5;
+document.addEventListener("keydown", (e) => {
+  if (!live || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.("input, select, textarea, button")) return;
+  switch (e.key) {
+    case " ":
+      setPaused(!paused);
+      break;
+    case "ArrowLeft":
+    case "ArrowRight":
+      if (!paused) return;
+      live.step(e.key === "ArrowRight" ? 1 : -1);
+      break;
+    case "ArrowUp":
+    case "ArrowDown":
+      $("fps").value = clamp(
+        fps() + (e.key === "ArrowUp" ? FPS_STEP : -FPS_STEP),
+        FPS.min,
+        FPS.max,
+        FPS.fallback,
+      );
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+  showOsd();
+});
+
+// A tapped button must not stay highlighted, and it must not keep the Space key.
+document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
+
+// Only digits and "/" can be typed, so a stray letter never reaches the parser.
+$("replay").addEventListener("input", () => {
+  $("replay").value = $("replay").value.replace(/[^\d/]/g, "");
+});
+function replayNow() {
+  fail("");
+  if (!live) return;
+  const parsed = parseRanges($("replay").value, live.k);
+  if (parsed.error) {
+    fail(parsed.error);
+    return;
+  }
+  const frames = rangeFrames(parsed.ranges);
+  live.playAgain(frames);
+  $("replay").value = "";
+  $("send-status").textContent = `Replaying ${frames.length} frames.`;
+}
+$("replay-go").onclick = replayNow;
+$("replay").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") replayNow();
+});
 
 $("reset-send").onclick = () => {
   stopRun();
@@ -354,6 +543,7 @@ $("reset-send").onclick = () => {
 // and then to find new codes. The camera is never slowed down: a frame that finds every
 // worker busy is dropped and counted, never queued. The fountain code does not need it.
 
+const GAP_LIST = 6; // runs listed after a FIN code
 const REGION_TTL_MS = 1500;
 const FULL_SCAN_MS = 1500;
 const FULL_SCAN_DEGRADED_MS = 250;
@@ -382,6 +572,7 @@ let expected = 0;
 let expectedAt = 0;
 let frameId = 0;
 let verdict = "";
+let finSeen = false; // a FIN code of this stream was read, so the missing runs are shown
 const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
 let shown = { ...stats };
 let rateWindow = []; // [time, payload bytes] for every useful frame
@@ -526,6 +717,15 @@ function onDecoded(bytes, box, info) {
   stats.decoded++;
   if (info?.tracked) stats.tracked++;
   if (box) noteRegion(box, performance.now(), true, info);
+  const fin = parseFin(bytes);
+  if (fin) {
+    // The sender finished a sweep. Only the stream being received counts.
+    if (decoder && fin.sessionId === decoder.sessionId && fin.k === decoder.k) {
+      finSeen = true;
+      requestRender();
+    }
+    return;
+  }
   const parsed = parseFrame(bytes);
   if (!parsed) {
     // Some other QR code, or a frame from a different version of the sender.
@@ -550,6 +750,7 @@ function onDecoded(bytes, box, info) {
       header.totalLen,
     );
     streamKey = key;
+    finSeen = false;
     startedAt = performance.now();
     rateWindow = [];
   }
@@ -668,6 +869,7 @@ $("reset").onclick = () => {
   regions = [];
   rateWindow = [];
   verdict = "";
+  finSeen = false;
   startedAt = 0;
   $("rx-rate").textContent = "";
   $("rx-error").textContent = "";
@@ -746,6 +948,16 @@ function render() {
       `Progress: ${Math.floor(estimate.fraction * 100)}%\nBlocks solved: ${decoder.solvedCount} of ${decoder.k}\nFrames used: ${useful}`;
   } else {
     $("rx-info").textContent = "";
+  }
+  // After a FIN code, list the runs of blocks still missing, longest first. Typing them
+  // into the sender plays exactly those frames again.
+  const gaps = finSeen && decoder && !result ? findGaps(decoder.solved) : [];
+  if (gaps.length) {
+    const lacking = gaps.reduce((sum, g) => sum + g.count, 0);
+    $("rx-gaps").textContent =
+      `Missing ${lacking} blocks in ${gaps.length} runs. To play the longest again, type this into the sender: ${formatRanges(gaps, GAP_LIST)}`;
+  } else {
+    $("rx-gaps").textContent = "";
   }
   $("download").hidden = !result;
   if (result) $("download").textContent = `Download ${result.file.name}`;
