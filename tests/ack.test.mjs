@@ -5,6 +5,7 @@ import {
   ACK_MAX_RUNS,
   findGaps,
   packAck,
+  packHello,
   parseAck,
   parseFin,
 } from "../static/tools/qr-share/app/fin.js";
@@ -22,9 +23,27 @@ const sample = {
 };
 
 test("an ACK code survives a round trip", () => {
-  assert.deepEqual(parseAck(packAck(sample)), sample);
+  assert.deepEqual(parseAck(packAck(sample)), { ...sample, hello: false });
   const done = { ...sample, done: true, solved: 2907, runs: [] };
-  assert.deepEqual(parseAck(packAck(done)), done);
+  assert.deepEqual(parseAck(packAck(done)), { ...done, hello: false });
+});
+
+test("a HELLO code says a receiver is ready and nothing more", () => {
+  const hello = parseAck(packHello(7));
+  assert.deepEqual(hello, {
+    sessionId: 0,
+    k: 0,
+    seq: 7,
+    solved: 0,
+    done: false,
+    hello: true,
+    runs: [],
+  });
+  assert.equal(parseAck(packAck(sample)).hello, false);
+  assert.deepEqual(classifyFrame(packHello(1)), { kind: "foreign" });
+  // k of zero is only valid for a HELLO.
+  assert.equal(parseAck(packAck({ ...sample, k: 0, runs: [] })), null);
+  assert.equal(parseAck(packAck({ ...sample, hello: true })), null);
 });
 
 test("an ACK code carries at most eight runs", () => {

@@ -95,7 +95,32 @@ const ACK_VERSION = 1;
 const ACK_HEAD = 12;
 export const ACK_MAX_RUNS = 8;
 
-export function packAck({ sessionId, k, seq, solved, done, runs }) {
+const FLAG_DONE = 1;
+const FLAG_HELLO = 2;
+
+// A HELLO is an ACK with no stream behind it yet. A receiver shows one as soon as its
+// camera is up, so a sender that sees it knows someone is ready and can start by itself.
+export function packHello(seq) {
+  return packAck({
+    sessionId: 0,
+    k: 0,
+    seq,
+    solved: 0,
+    done: false,
+    hello: true,
+    runs: [],
+  });
+}
+
+export function packAck({
+  sessionId,
+  k,
+  seq,
+  solved,
+  done,
+  hello = false,
+  runs,
+}) {
   const used = runs.slice(0, ACK_MAX_RUNS);
   const out = new Uint8Array(ACK_HEAD + 4 * used.length);
   const dv = new DataView(out.buffer);
@@ -105,7 +130,7 @@ export function packAck({ sessionId, k, seq, solved, done, runs }) {
   dv.setUint16(4, k, true);
   dv.setUint16(6, seq & 0xffff, true);
   dv.setUint16(8, solved, true);
-  dv.setUint8(10, done ? 1 : 0);
+  dv.setUint8(10, (done ? FLAG_DONE : 0) | (hello ? FLAG_HELLO : 0));
   dv.setUint8(11, used.length);
   used.forEach((r, i) => {
     dv.setUint16(ACK_HEAD + 4 * i, r.start, true);
@@ -125,7 +150,14 @@ export function parseAck(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const n = dv.getUint8(11);
   const k = dv.getUint16(4, true);
-  if (k === 0 || n > ACK_MAX_RUNS || bytes.length !== ACK_HEAD + 4 * n)
+  const flags = dv.getUint8(10);
+  const hello = (flags & FLAG_HELLO) !== 0;
+  if (hello && (k !== 0 || n !== 0)) return null;
+  if (
+    (k === 0 && !hello) ||
+    n > ACK_MAX_RUNS ||
+    bytes.length !== ACK_HEAD + 4 * n
+  )
     return null;
   const runs = [];
   for (let i = 0; i < n; i++) {
@@ -139,7 +171,8 @@ export function parseAck(bytes) {
     k,
     seq: dv.getUint16(6, true),
     solved: dv.getUint16(8, true),
-    done: dv.getUint8(10) === 1,
+    done: (flags & FLAG_DONE) !== 0,
+    hello,
     runs,
   };
 }

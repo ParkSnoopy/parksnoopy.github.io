@@ -32,6 +32,7 @@ import {
   ACK_MAX_RUNS,
   packAck,
   packFin,
+  packHello,
   parseAck,
   parseFin,
   parseRanges,
@@ -66,6 +67,9 @@ function showTab(name) {
     $(t).hidden = t !== name;
     $(`tab-${t}`).classList.toggle("active", t === name);
   }
+  // Opening the receive tab is the only thing a receiver has to do. The camera comes on
+  // and a HELLO code goes up for the sender to find.
+  if (name === "receive") startReceiverCamera();
 }
 $("tab-send").onclick = () => showTab("send");
 $("tab-receive").onclick = () => showTab("receive");
@@ -158,6 +162,7 @@ async function prepare() {
   }
   updateInfo();
   setIdle(true);
+  arm();
 }
 
 function updateInfo() {
@@ -490,24 +495,41 @@ canvas.onclick = () => {
 
 $("file").onchange = prepare;
 $("bytes").onchange = $("codes").onchange = () => {
+  const wasRunning = !!live;
   if (live) stopRun();
   updateInfo();
   $("send-status").textContent = "";
+  if (wasRunning) arm();
 };
 $("fps").onchange = () => {
   $("fps").value = fps();
 };
 
-$("start").onclick = () => {
+// Starts the stream. Pressing Start does this, and so does a receiver that shows up.
+function beginSend() {
   fail("");
+  armed = false;
+  if (!packed || live) return;
   paused = false;
   if (!startStream()) return;
   keepAwake();
   $("send-rate").textContent = "Transfer rate: measuring...";
   $("send-status").textContent =
-    "Sending. The stream repeats until you press Reset, so keep it up until the receiver says Done.";
+    "Sending. The stream repeats until the receiver confirms it has the file.";
   setIdle(false);
-};
+}
+$("start").onclick = beginSend;
+
+// With a file ready the sender turns its camera on and waits. The first HELLO or ACK code
+// it sees on the other screen starts the stream, so nobody has to press anything.
+let armed = false;
+function arm() {
+  armed = !!packed;
+  if (!armed) return;
+  $("send-status").textContent =
+    "Ready. Point this camera at the receiver's screen. Sending starts by itself when it sees the receiver.";
+  if (!txStream) $("tx-cam").click();
+}
 
 function setPaused(value) {
   paused = value;
@@ -573,8 +595,16 @@ const txPool = new DecodeWorkerPool(
 
 function onAckFrame(bytes) {
   const ack = parseAck(bytes);
-  if (!ack || !live || ack.sessionId !== live.sessionId || ack.k !== live.k)
+  if (!ack) return;
+  if (ack.hello) {
+    // A receiver is ready and nothing is running yet.
+    if (!live) {
+      $("tx-peer").textContent = "Receiver seen.";
+      if (armed) beginSend();
+    }
     return;
+  }
+  if (!live || ack.sessionId !== live.sessionId || ack.k !== live.k) return;
   const now = performance.now();
   // The same answer again proves the link is up. It is only acted on again after the
   // retry window, so a replay that was lost again gets asked for once more.
@@ -601,6 +631,7 @@ function onAckFrame(bytes) {
 
 function finishSend() {
   stopRun();
+  armed = false;
   stopTxCamera();
   if (document.fullscreenElement) document.exitFullscreen();
   $("send-status").textContent =
@@ -703,6 +734,7 @@ $("replay").addEventListener("keydown", (e) => {
 
 $("reset-send").onclick = () => {
   stopRun();
+  armed = false;
   $("send-status").textContent = "Stopped. Press Start transfer to send again.";
   updateInfo();
 };
@@ -1016,14 +1048,16 @@ function cameraError(e) {
   }
 }
 
-$("cam").onclick = async () => {
+let cameraStarting = false;
+async function startReceiverCamera() {
   $("rx-error").textContent = "";
-  if (stream) return;
+  if (stream || cameraStarting) return;
   const blocked = insecureMessage();
   if (blocked) {
     $("rx-error").textContent = blocked;
     return;
   }
+  cameraStarting = true;
   try {
     stream = await acquireCamera();
     video.srcObject = stream;
@@ -1032,6 +1066,8 @@ $("cam").onclick = async () => {
     stopCamera();
     $("rx-error").textContent = cameraError(e);
     return;
+  } finally {
+    cameraStarting = false;
   }
   done = false;
   pool.resize(WORKERS);
@@ -1039,7 +1075,8 @@ $("cam").onclick = async () => {
   captureGen++;
   schedule(captureGen);
   render();
-};
+}
+$("cam").onclick = startReceiverCamera;
 
 $("reset").onclick = () => {
   captureGen++;
@@ -1058,6 +1095,8 @@ $("reset").onclick = () => {
   if (stream) {
     done = false;
     schedule(captureGen);
+  } else {
+    startReceiverCamera(); // the camera went off when the last file finished
   }
   render();
 };
@@ -1109,30 +1148,36 @@ let ackKey = "";
 
 function updateAck() {
   const wrap = $("ack-wrap");
-  if (!decoder) {
+  let key;
+  let make;
+  if (decoder) {
+    const finished = !!result;
+    const gaps = finished ? [] : findGaps(decoder.solved.slice(0, high + 1));
+    const runs = gaps.slice(0, ACK_MAX_RUNS);
+    const solved = finished ? decoder.k : decoder.solvedCount;
+    key = `${decoder.sessionId}|${solved}|${finished}|${runs.map((r) => `${r.start}/${r.count}`)}`;
+    make = (seq) =>
+      packAck({
+        sessionId: decoder.sessionId,
+        k: decoder.k,
+        seq,
+        solved,
+        done: finished,
+        runs,
+      });
+  } else if (stream) {
+    // The camera is on and no stream has been seen yet: say so, so the sender can start.
+    key = "hello";
+    make = packHello;
+  } else {
     wrap.hidden = true;
+    ackKey = "";
     return;
   }
-  const finished = !!result;
-  const gaps = finished ? [] : findGaps(decoder.solved.slice(0, high + 1));
-  const runs = gaps.slice(0, ACK_MAX_RUNS);
-  const solved = finished ? decoder.k : decoder.solvedCount;
-  const key = `${decoder.sessionId}|${solved}|${finished}|${runs.map((r) => `${r.start}/${r.count}`)}`;
   if (key === ackKey) return;
   ackKey = key;
   ackSeq = (ackSeq + 1) & 0xffff;
-  const qr = createFrameQr(
-    packAck({
-      sessionId: decoder.sessionId,
-      k: decoder.k,
-      seq: ackSeq,
-      solved,
-      done: finished,
-      runs,
-    }),
-    "L",
-    undefined,
-  );
+  const qr = createFrameQr(make(ackSeq), "L", undefined);
   const raster = rasterizeQr(qr.modules.size, qr.modules.data, MARGIN);
   const cv = $("ack");
   cv.width = cv.height = raster.size;
@@ -1200,3 +1245,6 @@ function render() {
   $("download").hidden = !result;
   if (result) $("download").textContent = `Download ${result.file.name}`;
 }
+
+// A link that ends in #receive opens straight on the receive tab with the camera on.
+if (location.hash === "#receive") showTab("receive");
