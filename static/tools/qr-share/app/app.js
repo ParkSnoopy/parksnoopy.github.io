@@ -881,6 +881,8 @@ let zoomLevel = 1;
 let zoomRange = null; // { min, max, step } when the camera can zoom
 let zoomWant = null;
 let zoomBusy = false;
+// Some browsers fire only "change" for a range input, so listen to both.
+$("zoom").addEventListener("change", () => setZoom(Number($("zoom").value)));
 
 function setupZoom() {
   const track = stream?.getVideoTracks()[0];
@@ -911,7 +913,11 @@ async function setZoom(level) {
       zoomWant = null;
       await stream
         .getVideoTracks()[0]
-        .applyConstraints({ advanced: [{ zoom: want }] });
+        .applyConstraints({ advanced: [{ zoom: want }] })
+        // Some browsers accept zoom only as a plain constraint.
+        .catch(() =>
+          stream?.getVideoTracks()[0]?.applyConstraints({ zoom: want }),
+        );
       // Boxes found at the old zoom no longer point at the codes.
       regions = [];
     }
@@ -958,6 +964,8 @@ $("zoom").addEventListener("input", () => setZoom(Number($("zoom").value)));
 async function acquireCamera() {
   const base = {
     facingMode: "environment",
+    // Desktop Chrome lets a page move a webcam's zoom only if it asked for it up front.
+    zoom: true,
     width: { ideal: 1280 },
     height: { ideal: 960 },
   };
