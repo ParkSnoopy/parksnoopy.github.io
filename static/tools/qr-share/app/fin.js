@@ -86,6 +86,54 @@ export function parseRanges(text, k) {
   return { ranges };
 }
 
+// The META code is the first thing a sender shows. It is one QR code that names the file
+// and the stream, so a page that reads it knows what is coming and becomes the receiver.
+// The data stream does not start until the receiver answers with an ACK code for the same
+// session. Its first byte is not the Decimen magic byte either.
+export const META_MAGIC = 0xf3;
+const META_VERSION = 1;
+const META_HEAD = 13;
+const META_NAME_MAX = 60; // bytes of UTF-8
+
+export function packMeta({ sessionId, k, blockLen, size, name }) {
+  let bytes = new TextEncoder().encode(name).subarray(0, META_NAME_MAX);
+  // A cut can leave half a character at the end. Drop it.
+  const text = new TextDecoder().decode(bytes).replace(/\uFFFD+$/u, "");
+  bytes = new TextEncoder().encode(text);
+  const out = new Uint8Array(META_HEAD + bytes.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint8(0, META_MAGIC);
+  dv.setUint8(1, META_VERSION);
+  dv.setUint16(2, sessionId, true);
+  dv.setUint16(4, k, true);
+  dv.setUint16(6, blockLen, true);
+  dv.setUint32(8, size, true);
+  dv.setUint8(12, bytes.length);
+  out.set(bytes, META_HEAD);
+  return out;
+}
+
+// Returns null for anything that is not a well-formed META code of this version.
+export function parseMeta(bytes) {
+  if (
+    bytes.length < META_HEAD ||
+    bytes[0] !== META_MAGIC ||
+    bytes[1] !== META_VERSION
+  )
+    return null;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const n = dv.getUint8(12);
+  const k = dv.getUint16(4, true);
+  if (k === 0 || bytes.length !== META_HEAD + n) return null;
+  return {
+    sessionId: dv.getUint16(2, true),
+    k,
+    blockLen: dv.getUint16(6, true),
+    size: dv.getUint32(8, true),
+    name: new TextDecoder().decode(bytes.subarray(META_HEAD)),
+  };
+}
+
 // The ACK code goes the other way. The receiver keeps one on its own screen while it
 // works, and the sender's camera reads it. It says how far the receiver has got and which
 // runs of blocks it lacks below the highest block it has seen, so the sender can replay
@@ -96,31 +144,8 @@ const ACK_HEAD = 12;
 export const ACK_MAX_RUNS = 8;
 
 const FLAG_DONE = 1;
-const FLAG_HELLO = 2;
 
-// A HELLO is an ACK with no stream behind it yet. A receiver shows one as soon as its
-// camera is up, so a sender that sees it knows someone is ready and can start by itself.
-export function packHello(seq) {
-  return packAck({
-    sessionId: 0,
-    k: 0,
-    seq,
-    solved: 0,
-    done: false,
-    hello: true,
-    runs: [],
-  });
-}
-
-export function packAck({
-  sessionId,
-  k,
-  seq,
-  solved,
-  done,
-  hello = false,
-  runs,
-}) {
+export function packAck({ sessionId, k, seq, solved, done, runs }) {
   const used = runs.slice(0, ACK_MAX_RUNS);
   const out = new Uint8Array(ACK_HEAD + 4 * used.length);
   const dv = new DataView(out.buffer);
@@ -130,7 +155,7 @@ export function packAck({
   dv.setUint16(4, k, true);
   dv.setUint16(6, seq & 0xffff, true);
   dv.setUint16(8, solved, true);
-  dv.setUint8(10, (done ? FLAG_DONE : 0) | (hello ? FLAG_HELLO : 0));
+  dv.setUint8(10, done ? FLAG_DONE : 0);
   dv.setUint8(11, used.length);
   used.forEach((r, i) => {
     dv.setUint16(ACK_HEAD + 4 * i, r.start, true);
@@ -151,13 +176,7 @@ export function parseAck(bytes) {
   const n = dv.getUint8(11);
   const k = dv.getUint16(4, true);
   const flags = dv.getUint8(10);
-  const hello = (flags & FLAG_HELLO) !== 0;
-  if (hello && (k !== 0 || n !== 0)) return null;
-  if (
-    (k === 0 && !hello) ||
-    n > ACK_MAX_RUNS ||
-    bytes.length !== ACK_HEAD + 4 * n
-  )
+  if (k === 0 || n > ACK_MAX_RUNS || bytes.length !== ACK_HEAD + 4 * n)
     return null;
   const runs = [];
   for (let i = 0; i < n; i++) {
@@ -172,7 +191,6 @@ export function parseAck(bytes) {
     seq: dv.getUint16(6, true),
     solved: dv.getUint16(8, true),
     done: (flags & FLAG_DONE) !== 0,
-    hello,
     runs,
   };
 }

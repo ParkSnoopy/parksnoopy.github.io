@@ -9,20 +9,42 @@
   <body>
     <p><a href="../">&lt; back to the tool page</a></p>
     <h1>QR file share</h1>
-    <p class="dim">
-      Everything runs in this page. Nothing is uploaded, and nothing leaves your
-      device after the page has loaded.
-    </p>
-    <p class="dim">
-      Open a file to send it. Otherwise this page waits with its camera on and
-      starts receiving as soon as it reads a code from another device.
-    </p>
+    <div id="intro">
+      <p class="dim">
+        Everything runs in this page. Nothing is uploaded, and nothing leaves
+        your device after the page has loaded.
+      </p>
+      <p class="dim">
+        Open a file to send it. It shows a code that names the file. Otherwise
+        this page waits with its camera on and becomes the receiver as soon as
+        it reads such a code. The receiver's answer starts the sender.
+      </p>
+    </div>
 
     <div id="pick">
       <label>File to send <input id="file" type="file" /></label>
     </div>
 
     <section id="send" hidden>
+      <!-- The code comes first so it is on screen the moment a file is chosen. -->
+      <div class="shown">
+        <canvas id="code" hidden></canvas>
+        <div id="osd" class="osd"></div>
+      </div>
+      <p id="send-status"></p>
+      <p id="send-rate"></p>
+      <p id="tx-peer" class="dim"></p>
+      <div class="row">
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="reset-send" type="button">Reset</button>
+      </div>
+      <p id="send-error" class="error"></p>
+      <p class="dim">
+        Click the code to show it full screen. Keys: Space pauses and resumes.
+        Left and Right step one frame while paused. Up and Down change the speed
+        by 5 fps.
+      </p>
+      <p id="send-info" class="dim">Choose a file.</p>
       <div class="row">
         <label
           >Bytes per frame
@@ -41,16 +63,6 @@
           <input id="fps" type="number" min="1" max="60" value="30"
         /></label>
       </div>
-      <p id="send-info" class="dim">Choose a file.</p>
-      <div class="shown">
-        <canvas id="code" hidden></canvas>
-        <div id="osd" class="osd"></div>
-      </div>
-      <p class="dim">
-        Click the code to show it full screen. Keys: Space pauses and resumes.
-        Left and Right step one frame while paused. Up and Down change the speed
-        by 5 fps.
-      </p>
       <div class="row">
         <label
           >Play again (start/count pairs, such as 120/30/300/6)
@@ -68,15 +80,6 @@
         lost blocks by itself, and sending stops when it has the whole file.
       </p>
       <div class="video"><video id="tx-video" muted playsinline></video></div>
-      <p id="tx-peer" class="dim"></p>
-      <p id="send-status"></p>
-      <p id="send-rate"></p>
-      <div class="row">
-        <button id="start" type="button" disabled>Start transfer</button>
-        <button id="pause" type="button" disabled>Pause</button>
-        <button id="reset-send" type="button">Reset</button>
-      </div>
-      <p id="send-error" class="error"></p>
     </section>
 
     <section id="receive">

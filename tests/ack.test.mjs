@@ -5,9 +5,10 @@ import {
   ACK_MAX_RUNS,
   findGaps,
   packAck,
-  packHello,
+  packMeta,
   parseAck,
   parseFin,
+  parseMeta,
 } from "../static/tools/qr-share/app/fin.js";
 
 const sample = {
@@ -23,27 +24,60 @@ const sample = {
 };
 
 test("an ACK code survives a round trip", () => {
-  assert.deepEqual(parseAck(packAck(sample)), { ...sample, hello: false });
+  assert.deepEqual(parseAck(packAck(sample)), sample);
   const done = { ...sample, done: true, solved: 2907, runs: [] };
-  assert.deepEqual(parseAck(packAck(done)), { ...done, hello: false });
+  assert.deepEqual(parseAck(packAck(done)), done);
 });
 
-test("a HELLO code says a receiver is ready and nothing more", () => {
-  const hello = parseAck(packHello(7));
-  assert.deepEqual(hello, {
-    sessionId: 0,
-    k: 0,
-    seq: 7,
-    solved: 0,
-    done: false,
-    hello: true,
-    runs: [],
+test("a META code names the file and the stream", () => {
+  const meta = {
+    sessionId: 4711,
+    k: 727,
+    blockLen: 1443,
+    size: 1048576,
+    name: "report.pdf",
+  };
+  const bytes = packMeta(meta);
+  assert.deepEqual(parseMeta(bytes), meta);
+  assert.deepEqual(classifyFrame(bytes), { kind: "foreign" });
+  assert.equal(parseAck(bytes), null);
+  assert.equal(parseFin(bytes), null);
+  assert.equal(parseMeta(packAck(sample)), null);
+});
+
+test("a long or non-Latin file name is cut on a character boundary", () => {
+  const name = `${"보고서".repeat(30)}.pdf`;
+  const meta = parseMeta(
+    packMeta({ sessionId: 1, k: 2, blockLen: 100, size: 5, name }),
+  );
+  assert.ok(name.startsWith(meta.name));
+  assert.ok(new TextEncoder().encode(meta.name).length <= 60);
+  assert.ok(!meta.name.includes("\uFFFD"));
+  assert.equal(
+    parseMeta(
+      packMeta({ sessionId: 1, k: 2, blockLen: 100, size: 5, name: "" }),
+    ).name,
+    "",
+  );
+});
+
+test("malformed META codes are refused", () => {
+  const good = packMeta({
+    sessionId: 1,
+    k: 2,
+    blockLen: 100,
+    size: 5,
+    name: "a",
   });
-  assert.equal(parseAck(packAck(sample)).hello, false);
-  assert.deepEqual(classifyFrame(packHello(1)), { kind: "foreign" });
-  // k of zero is only valid for a HELLO.
-  assert.equal(parseAck(packAck({ ...sample, k: 0, runs: [] })), null);
-  assert.equal(parseAck(packAck({ ...sample, hello: true })), null);
+  assert.equal(parseMeta(good.subarray(0, good.length - 1)), null);
+  assert.equal(parseMeta(new Uint8Array(13)), null);
+  assert.equal(parseMeta(new Uint8Array(0)), null);
+  assert.equal(
+    parseMeta(
+      packMeta({ sessionId: 1, k: 0, blockLen: 100, size: 5, name: "a" }),
+    ),
+    null,
+  );
 });
 
 test("an ACK code carries at most eight runs", () => {

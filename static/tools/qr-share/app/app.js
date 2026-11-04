@@ -32,9 +32,10 @@ import {
   ACK_MAX_RUNS,
   packAck,
   packFin,
-  packHello,
+  packMeta,
   parseAck,
   parseFin,
+  parseMeta,
   parseRanges,
   rangeFrames,
 } from "./fin.js";
@@ -64,7 +65,7 @@ async function keepAwake() {
 //
 // There is no switch between sending and receiving. A page that is given a file is a
 // sender. A page that reads a code from another device is a receiver. Until one of those
-// happens it is idle: camera on, a HELLO code on screen, waiting.
+// happens it is idle: camera on, nothing on screen, waiting.
 
 let mode = "idle"; // "idle" | "send" | "receive"
 function setMode(next) {
@@ -72,6 +73,8 @@ function setMode(next) {
   $("send").hidden = next !== "send";
   $("receive").hidden = next === "send";
   $("pick").hidden = next === "receive";
+  // The notes give way once there is a code to look at.
+  $("intro").hidden = next !== "idle";
 }
 
 // ---------- sender ----------
@@ -115,7 +118,6 @@ function fail(message) {
 }
 
 function setIdle(idle) {
-  $("start").disabled = !idle || !packed;
   $("pause").disabled = idle;
   $("replay").disabled = $("replay-go").disabled = idle;
 }
@@ -147,7 +149,6 @@ function enterSend() {
 // Back to waiting: no file, no stream, receiver camera on again.
 function leaveSend() {
   stopRun();
-  armed = false;
   packing++;
   stopTxCamera();
   packed = null;
@@ -202,8 +203,11 @@ function updateInfo() {
     `${packed.name}: ${sent}. Each frame carries ${blockLen} B of file data.`;
 }
 
-function startStream() {
+// With `wait` set the stream is built but held back. The screen shows the META code, which
+// names the file, until a receiver answers with an ACK code for this session.
+function startStream(wait = false) {
   const gen = ++generation;
+  let waiting = wait;
   const frameBytes = Number($("bytes").value);
   const codes = Number($("codes").value);
   const { cols, rows } = gridDims(codes);
@@ -259,6 +263,25 @@ function startStream() {
           sessionId,
           k: encoder.k,
           sweeps: Math.floor(seq / cycle) + 1,
+        }),
+        "L",
+        version,
+      ),
+    ),
+  });
+
+  // The same size as every other code, so the grid does not change shape when it starts.
+  const makeMeta = () => ({
+    n: -1,
+    fin: true,
+    img: toImage(
+      createFrameQr(
+        packMeta({
+          sessionId,
+          k: encoder.k,
+          blockLen,
+          size: packed.size,
+          name: packed.name,
         }),
         "L",
         version,
@@ -419,8 +442,10 @@ function startStream() {
     for (let i = 0; i < codes; i++) paint(i, item);
   };
   // Steps by one screen. A frame is one code, so a grid steps by as many frames as it shows.
-  const step = (direction) =>
+  const step = (direction) => {
+    if (waiting) return;
     show(direction > 0 ? lastSeq + 1 : lastSeq - 2 * codes + 1);
+  };
 
   live = {
     resize: sizeCanvas,
@@ -434,7 +459,12 @@ function startStream() {
     playAgain,
     onAck,
     sessionId,
+    waiting: () => waiting,
+    go: () => {
+      waiting = false;
+    },
   };
+  if (waiting) paintAll(makeMeta());
 
   // Each cell flips at its own phase of the frame interval. A camera exposure that spans a
   // flip then catches at most one code half changed, not all of them at once.
@@ -442,7 +472,7 @@ function startStream() {
   const tick = (now) => {
     if (gen !== generation) return;
     requestAnimationFrame(tick);
-    if (paused) {
+    if (paused || waiting) {
       nextAt = now;
       return;
     }
@@ -478,6 +508,8 @@ function startStream() {
 
 // The line shown over the code in full screen, and in the status line otherwise.
 function sendState() {
+  if (live.waiting())
+    return "Waiting for a receiver. Show this code to its camera and sending starts by itself.";
   const word = paused ? "Paused" : "Sending";
   return `${word} at ${fps()} fps, frame ${live.position()} (${live.k} blocks per sweep).${peerState()}`;
 }
@@ -500,9 +532,13 @@ function showOsd() {
 
 setInterval(() => {
   if (!live) return;
+  if (live.waiting()) {
+    $("send-status").textContent = sendState();
+    return;
+  }
   const left = live.replayLeft();
   $("send-status").textContent =
-    `${sendState()}${left ? ` Replaying, ${left} frames to go.` : ""} The stream repeats until you press Reset.`;
+    `${sendState()}${left ? ` Replaying, ${left} frames to go.` : ""} The stream repeats until the receiver confirms it has the file.`;
   if (paused) return;
   const now = performance.now();
   while (live.flips.length && now - live.flips[0] > 1000) live.flips.shift();
@@ -530,29 +566,23 @@ $("fps").onchange = () => {
   $("fps").value = fps();
 };
 
-// Starts the stream. Pressing Start does this, and so does a receiver that shows up.
-function beginSend() {
+// Puts the META code on screen and holds the stream back. There is no Start button: the
+// stream is released by the receiver's ACK code.
+function present() {
   fail("");
-  armed = false;
   if (!packed || live) return;
   paused = false;
-  if (!startStream()) return;
+  if (!startStream(true)) return;
   keepAwake();
-  $("send-rate").textContent = "Transfer rate: measuring...";
-  $("send-status").textContent =
-    "Sending. The stream repeats until the receiver confirms it has the file.";
+  $("send-rate").textContent = "";
   setIdle(false);
 }
-$("start").onclick = beginSend;
 
-// With a file ready the sender turns its camera on and waits. The first HELLO or ACK code
-// it sees on the other screen starts the stream, so nobody has to press anything.
-let armed = false;
+// With a file ready its META code goes up, so the other device can read it and become the
+// receiver. The sender's camera comes on too, to watch for the receiver's answer.
 function arm() {
-  armed = !!packed;
-  if (!armed) return;
-  $("send-status").textContent =
-    "Ready. Point this camera at the receiver's screen. Sending starts by itself when it sees the receiver.";
+  if (!packed) return;
+  present();
   startTxCamera();
 }
 
@@ -621,15 +651,12 @@ const txPool = new DecodeWorkerPool(
 function onAckFrame(bytes) {
   const ack = parseAck(bytes);
   if (!ack) return;
-  if (ack.hello) {
-    // A receiver is ready and nothing is running yet.
-    if (!live) {
-      $("tx-peer").textContent = "Receiver seen.";
-      if (armed) beginSend();
-    }
-    return;
-  }
   if (!live || ack.sessionId !== live.sessionId || ack.k !== live.k) return;
+  // The receiver read the META code and answered. Release the stream.
+  if (live.waiting()) {
+    live.go();
+    $("send-rate").textContent = "Transfer rate: measuring...";
+  }
   const now = performance.now();
   // The same answer again proves the link is up. It is only acted on again after the
   // retry window, so a replay that was lost again gets asked for once more.
@@ -656,7 +683,6 @@ function onAckFrame(bytes) {
 
 function finishSend() {
   stopRun();
-  armed = false;
   stopTxCamera();
   if (document.fullscreenElement) document.exitFullscreen();
   $("send-status").textContent =
@@ -797,6 +823,7 @@ let frameId = 0;
 let verdict = "";
 let finSeen = false; // a FIN code of this stream was read, so the missing runs are shown
 let high = -1; // the highest block number read so far, which bounds what can be missing
+let incoming = null; // the META code read before any data: { sessionId, k, blockLen, size, name }
 const stats = { captured: 0, decoded: 0, dropped: 0, tracked: 0, attempts: 0 };
 let shown = { ...stats };
 let rateWindow = []; // [time, payload bytes] for every useful frame
@@ -941,6 +968,17 @@ function onDecoded(bytes, box, info) {
   stats.decoded++;
   if (info?.tracked) stats.tracked++;
   if (box) noteRegion(box, performance.now(), true, info);
+  const meta = parseMeta(bytes);
+  if (meta) {
+    // A sender is showing the name of its file. Reading this makes the page a receiver,
+    // and the ACK code it then shows is what releases the stream.
+    if (mode === "idle") setMode("receive");
+    if (!decoder) {
+      incoming = meta;
+      requestRender();
+    }
+    return;
+  }
   const fin = parseFin(bytes);
   if (fin) {
     // The sender finished a sweep. Only the stream being received counts.
@@ -976,6 +1014,7 @@ function onDecoded(bytes, box, info) {
       header.totalLen,
     );
     streamKey = key;
+    incoming = null;
     finSeen = false;
     high = -1;
     startedAt = performance.now();
@@ -1114,6 +1153,7 @@ $("reset").onclick = () => {
   verdict = "";
   finSeen = false;
   high = -1;
+  incoming = null;
   ackKey = "";
   startedAt = 0;
   $("rx-rate").textContent = "";
@@ -1191,10 +1231,18 @@ function updateAck() {
         done: finished,
         runs,
       });
-  } else if (stream) {
-    // The camera is on and no stream has been seen yet: say so, so the sender can start.
-    key = "hello";
-    make = packHello;
+  } else if (incoming) {
+    // The META code was read and no data yet. This answer is what starts the sender.
+    key = `meta|${incoming.sessionId}`;
+    make = (seq) =>
+      packAck({
+        sessionId: incoming.sessionId,
+        k: incoming.k,
+        seq,
+        solved: 0,
+        done: false,
+        runs: [],
+      });
   } else {
     wrap.hidden = true;
     ackKey = "";
@@ -1236,6 +1284,8 @@ function render() {
   let status = "Camera is off.";
   if (result) status = "Done. The file is rebuilt and its SHA-256 matches.";
   else if (decoder) status = "Receiving...";
+  else if (incoming)
+    status = "Found a sender. Waiting for it to start. Keep it in view.";
   else if (stream)
     status =
       "Waiting. Point the camera at the other device's screen, or open a file to send.";
@@ -1257,6 +1307,9 @@ function render() {
     );
     $("rx-info").textContent =
       `Progress: ${Math.floor(estimate.fraction * 100)}%\nBlocks solved: ${decoder.solvedCount} of ${decoder.k}\nFrames used: ${useful}`;
+  } else if (incoming) {
+    $("rx-info").textContent =
+      `File: ${incoming.name}\nSize: ${fmtBytes(incoming.size)}`;
   } else {
     $("rx-info").textContent = "";
   }
