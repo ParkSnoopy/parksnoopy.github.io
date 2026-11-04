@@ -13,14 +13,16 @@
       Everything runs in this page. Nothing is uploaded, and nothing leaves your
       device after the page has loaded.
     </p>
+    <p class="dim">
+      Open a file to send it. Otherwise this page waits with its camera on and
+      starts receiving as soon as it reads a code from another device.
+    </p>
 
-    <nav>
-      <button id="tab-send" class="tab active" type="button">Send</button>
-      <button id="tab-receive" class="tab" type="button">Receive</button>
-    </nav>
+    <div id="pick">
+      <label>File to send <input id="file" type="file" /></label>
+    </div>
 
-    <section id="send">
-      <label>File <input id="file" type="file" /></label>
+    <section id="send" hidden>
       <div class="row">
         <label
           >Bytes per frame
@@ -61,13 +63,10 @@
         /></label>
         <button id="replay-go" type="button" disabled>Replay</button>
       </div>
-      <div class="row">
-        <button id="tx-cam" type="button">Start camera</button>
-        <span class="dim"
-          >Watch the receiver's screen. The receiver then asks for lost blocks
-          by itself, and sending stops when it has the whole file.</span
-        >
-      </div>
+      <p class="dim">
+        This camera watches the receiver's screen. The receiver then asks for
+        lost blocks by itself, and sending stops when it has the whole file.
+      </p>
       <div class="video"><video id="tx-video" muted playsinline></video></div>
       <p id="tx-peer" class="dim"></p>
       <p id="send-status"></p>
@@ -75,14 +74,12 @@
       <div class="row">
         <button id="start" type="button" disabled>Start transfer</button>
         <button id="pause" type="button" disabled>Pause</button>
-        <button id="reset-send" type="button" disabled>Reset</button>
+        <button id="reset-send" type="button">Reset</button>
       </div>
       <p id="send-error" class="error"></p>
     </section>
 
-    <section id="receive" hidden>
-      <button id="cam" type="button">Start camera</button>
-      <button id="reset" type="button">Reset</button>
+    <section id="receive">
       <div class="video"><video id="video" muted playsinline></video></div>
       <p id="rx-status">Camera is off.</p>
       <p id="rx-rate"></p>
@@ -96,6 +93,7 @@
         <canvas id="ack"></canvas>
       </div>
       <button id="download" type="button" hidden>Download</button>
+      <button id="reset" type="button">Reset</button>
       <p id="rx-error" class="error"></p>
     </section>
 

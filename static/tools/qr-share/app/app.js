@@ -60,19 +60,19 @@ async function keepAwake() {
   }
 }
 
-// ---------- tabs ----------
+// ---------- role ----------
+//
+// There is no switch between sending and receiving. A page that is given a file is a
+// sender. A page that reads a code from another device is a receiver. Until one of those
+// happens it is idle: camera on, a HELLO code on screen, waiting.
 
-function showTab(name) {
-  for (const t of ["send", "receive"]) {
-    $(t).hidden = t !== name;
-    $(`tab-${t}`).classList.toggle("active", t === name);
-  }
-  // Opening the receive tab is the only thing a receiver has to do. The camera comes on
-  // and a HELLO code goes up for the sender to find.
-  if (name === "receive") startReceiverCamera();
+let mode = "idle"; // "idle" | "send" | "receive"
+function setMode(next) {
+  mode = next;
+  $("send").hidden = next !== "send";
+  $("receive").hidden = next === "send";
+  $("pick").hidden = next === "receive";
 }
-$("tab-send").onclick = () => showTab("send");
-$("tab-receive").onclick = () => showTab("receive");
 
 // ---------- sender ----------
 
@@ -116,7 +116,7 @@ function fail(message) {
 
 function setIdle(idle) {
   $("start").disabled = !idle || !packed;
-  $("pause").disabled = $("reset-send").disabled = idle;
+  $("pause").disabled = idle;
   $("replay").disabled = $("replay-go").disabled = idle;
 }
 
@@ -135,17 +135,42 @@ function stopRun() {
   setIdle(true);
 }
 
+// Opening a file makes this page a sender. The receiver's camera gives way to the
+// sender's, which watches the other screen instead.
+function enterSend() {
+  if (mode === "send") return;
+  captureGen++;
+  stopCamera();
+  setMode("send");
+}
+
+// Back to waiting: no file, no stream, receiver camera on again.
+function leaveSend() {
+  stopRun();
+  armed = false;
+  packing++;
+  stopTxCamera();
+  packed = null;
+  $("file").value = "";
+  $("send-info").textContent = "Choose a file.";
+  $("send-status").textContent = "";
+  fail("");
+  setMode("idle");
+  startReceiverCamera();
+}
+
 async function prepare() {
   const file = $("file").files[0];
+  if (!file) {
+    leaveSend();
+    return;
+  }
+  enterSend();
   stopRun();
   packed = null;
   setIdle(true);
   fail("");
   $("send-status").textContent = "";
-  if (!file) {
-    $("send-info").textContent = "Choose a file.";
-    return;
-  }
   const id = ++packing;
   $("send-info").textContent = "Compressing...";
   try {
@@ -528,7 +553,7 @@ function arm() {
   if (!armed) return;
   $("send-status").textContent =
     "Ready. Point this camera at the receiver's screen. Sending starts by itself when it sees the receiver.";
-  if (!txStream) $("tx-cam").click();
+  startTxCamera();
 }
 
 function setPaused(value) {
@@ -673,21 +698,19 @@ function stopTxCamera() {
   txVideo.srcObject = null;
   txPool.resize(0);
   txLastSeq = -1;
-  $("tx-cam").textContent = "Start camera";
   $("tx-peer").textContent = "";
 }
 
-$("tx-cam").onclick = async () => {
+let txStarting = false;
+async function startTxCamera() {
   fail("");
-  if (txStream) {
-    stopTxCamera();
-    return;
-  }
+  if (txStream || txStarting) return;
   const blocked = insecureMessage();
   if (blocked) {
     fail(blocked);
     return;
   }
+  txStarting = true;
   try {
     txStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
@@ -704,11 +727,12 @@ $("tx-cam").onclick = async () => {
     stopTxCamera();
     fail(cameraError(e));
     return;
+  } finally {
+    txStarting = false;
   }
   txPool.resize(1);
-  $("tx-cam").textContent = "Stop camera";
   txScan(++txGen);
-};
+}
 
 // Only digits and "/" can be typed, so a stray letter never reaches the parser.
 $("replay").addEventListener("input", () => {
@@ -732,12 +756,7 @@ $("replay").addEventListener("keydown", (e) => {
   if (e.key === "Enter") replayNow();
 });
 
-$("reset-send").onclick = () => {
-  stopRun();
-  armed = false;
-  $("send-status").textContent = "Stopped. Press Start transfer to send again.";
-  updateInfo();
-};
+$("reset-send").onclick = leaveSend;
 
 // ---------- receiver ----------
 //
@@ -947,6 +966,8 @@ function onDecoded(bytes, box, info) {
   }
   const { header, block } = parsed;
   const key = streamIdentity(header);
+  // The first stream code read makes this page a receiver.
+  if (mode === "idle") setMode("receive");
   if (!decoder || key !== streamKey) {
     decoder = new LTDecoder(
       header.k,
@@ -1037,7 +1058,7 @@ function cameraError(e) {
   switch (e.name) {
     case "NotAllowedError":
     case "SecurityError":
-      return "Camera permission is denied. Allow the camera for this site in the browser or system settings, then press Start camera again.";
+      return "Camera permission is denied. Allow the camera for this site in the browser or system settings, then reload this page.";
     case "NotFoundError":
     case "OverconstrainedError":
       return "No camera was found on this device.";
@@ -1051,7 +1072,7 @@ function cameraError(e) {
 let cameraStarting = false;
 async function startReceiverCamera() {
   $("rx-error").textContent = "";
-  if (stream || cameraStarting) return;
+  if (stream || cameraStarting || mode === "send") return;
   const blocked = insecureMessage();
   if (blocked) {
     $("rx-error").textContent = blocked;
@@ -1069,6 +1090,11 @@ async function startReceiverCamera() {
   } finally {
     cameraStarting = false;
   }
+  if (mode === "send") {
+    // A file was opened while the camera was still starting.
+    stopCamera();
+    return;
+  }
   done = false;
   pool.resize(WORKERS);
   keepAwake();
@@ -1076,9 +1102,9 @@ async function startReceiverCamera() {
   schedule(captureGen);
   render();
 }
-$("cam").onclick = startReceiverCamera;
 
 $("reset").onclick = () => {
+  setMode("idle");
   captureGen++;
   decoder = null;
   streamKey = "";
@@ -1210,7 +1236,9 @@ function render() {
   let status = "Camera is off.";
   if (result) status = "Done. The file is rebuilt and its SHA-256 matches.";
   else if (decoder) status = "Receiving...";
-  else if (stream) status = "Point the camera at the code on the sender.";
+  else if (stream)
+    status =
+      "Waiting. Point the camera at the other device's screen, or open a file to send.";
   $("rx-status").textContent = status;
 
   if (result) {
@@ -1246,5 +1274,5 @@ function render() {
   if (result) $("download").textContent = `Download ${result.file.name}`;
 }
 
-// A link that ends in #receive opens straight on the receive tab with the camera on.
-if (location.hash === "#receive") showTab("receive");
+// The page starts out waiting, with the camera on.
+startReceiverCamera();

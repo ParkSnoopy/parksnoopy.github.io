@@ -37,11 +37,6 @@ h1 {
   color: var(--err);
   min-height: 1.5em;
 }
-nav {
-  display: flex;
-  gap: 0.5rem;
-  margin: 1rem 0;
-}
 button,
 input,
 select {
@@ -56,10 +51,6 @@ button {
   cursor: pointer;
   color: var(--button-fg);
   -webkit-tap-highlight-color: transparent;
-}
-.tab.active {
-  background: var(--accent);
-  color: var(--button-active-fg);
 }
 /* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
 @media (hover: hover) {
