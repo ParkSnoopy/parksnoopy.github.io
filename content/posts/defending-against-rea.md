@@ -1,89 +1,65 @@
 ---
 title: "Defending Against REA (Reverse Engineer Anything)"
 date: 2026-11-03
-description: "What agent-assisted reverse engineering changes, and how Rust obfuscation raises the cost without making binaries secret."
+description: "Why agent-assisted reverse engineering changed how I think about distributing software, and what I built in response."
 tags: ["reverse-engineering", "rust", "security", "obfuscation"]
 ---
 
-An executable does not need to expose its source code for someone to change its behavior. My binary patch to Sublime Text's directory scanner shows how much an analyst can learn from a program they can inspect and run. Agent-assisted tools such as REA make that workflow easier to coordinate. I want to make useful analysis more expensive without promising an unreadable binary or pretending the client is a trusted machine.
+I used to think of reverse engineering as work that demanded a great deal of specialized attention. The tools were available, but someone still had to decide where to look, follow the evidence, and connect the pieces. REA made me reconsider what happens when an agent can take part in that work. My projects are an attempt to make the software I distribute less straightforward to understand and modify.
 
 <!--more-->
 
-## A patch without source code
+## A Short Time Ago, Human did the things
 
-My [Sublime Text patch article][sublime] documents a concrete case. Sublime Text 4 Build 4215 on Linux x86-64 recursively scanned a workspace with large repositories. The patch redirected two catalogue recursion calls and one sidebar branch to added code. The new code checked for `.git`, allowed recursive scans for an expanded Git project, and kept other folders shallow. It also changed an ELF program header to map executable hook code.
+Reverse engineering did not begin with AI agents. Disassemblers, decompilers, debuggers, and tracing tools have long made it possible to study software without its source code. An experienced analyst could examine a binary, test a hypothesis against a running program, and gradually work out where a behavior came from.
 
-In a workspace with ten LLVM checkouts, RSS after eight seconds fell from more than 305 MB and rising to 139 MB. The article also includes `openat` traces of the resulting expansion behavior. The patch targets one particular binary build and its offsets.
+What limited that work was not simply access to tools. The analyst had to learn their way around an unfamiliar program and keep track of what each observation meant. A promising string might lead to a function, which might lead to another function, and only later reveal whether the original lead mattered. Even with good tools, that process took knowledge, patience, and time.
 
-Even without the original source, observing behavior, tracing calls, and changing a few branches can be enough to alter a program. The same client-side control matters when the behavior being changed is a proprietary algorithm or a local authorization decision.
+That effort was never a guarantee of protection. It was part of the practical distance between distributing a program and someone else understanding enough of it to change it.
 
-## What REA changes
+## REA ERA
 
-[REA][rea] connects an AI agent to reverse-engineering workflows through the Model Context Protocol (MCP), and also provides a command-line interface. For native binaries it can coordinate tools such as Ghidra, IDA, or Hopper to inspect strings, calls, assembly, and pseudocode. Its scope also includes applications, websites, and runtime observations. REA does not magically recover the original source: the agent interprets available evidence, asks follow-up questions, and may produce an incomplete or incorrect reconstruction.
+ArtCraft offers a concrete example of what building software with AI agents can look like. Its [PhotoCraft][photocraft] project aims to recreate Adobe Photoshop's image-editing workflow, while [VectorCraft][vectorcraft] and [FilmCraft][filmcraft] take on Illustrator and Premiere Pro. The team has also started reimplementing Microsoft Office applications: [WordCraft][wordcraft] for Word, [GridCraft][gridcraft] for Excel, and [DeckCraft][deckcraft] for PowerPoint. These are open-source applications that aim to reproduce familiar workflows and work with existing file formats. ArtCraft's developer has [described using Claude][artcraft-report] to build the Adobe alternatives.
 
-Assume an analyst has a copy of the release, can run it with chosen inputs, and can examine or modify files and process memory. They may compare outputs, follow interesting strings and cross-references, inspect the loader, or patch a conditional branch. An agent can automate parts of that iteration. Obfuscation targets the cost of understanding those artifacts; it cannot prevent someone who controls the machine from observing the program's behavior.
+ArtCraft describes its approach as clean-room development using sources such as public specifications and observed behavior. The applications are still being developed; matching a familiar interface does not mean every feature or file behaves like the original. What interests me is that a team can use agents to help investigate and build alternatives to software that once seemed far too large to reproduce without an equally large development effort.
 
-## Build-time defense: Arkari for Rust
+[REA][rea], or Reverse Engineer Anything, is another expression of that shift: it connects agents to tools that help them investigate software and its behavior. ArtCraft's projects illustrate the broader possibility, while REA gives agents ways to examine programs more directly. For me, the important change is that finding out how software works and building on that understanding can involve much less manual effort than before.
 
-My [rust_llvm-arkari_ollvm][arkari] project combines Rust's LLVM fork with Arkari's obfuscation passes. A Rust compiler built against that backend can transform code during compilation, before it becomes a native executable. I provide Linux and Windows 64-bit release targets. Some passes have compatibility issues, including failures involving control-flow flattening and some dependencies.
+## My Sublime Text issue
 
-The passes address different clues:
+I ran into a problem with Sublime Text when opening a workspace containing several large repositories. The editor scanned the directory trees eagerly, and memory use grew quickly. The available settings did not stop the traversal I wanted to avoid.
 
-| Layer | What it changes | Cost and limit |
-| --- | --- | --- |
-| Indirect branches, calls, and globals | Replaces direct targets with indirection and encrypted target addresses. | Call and control-flow graphs become harder to follow, but targets must resolve at runtime. |
-| Control-flow flattening | Reorganizes control flow around a dispatcher rather than the original branch structure. | Can increase execution cost or cause compatibility failures; a dispatcher can still be analyzed. |
-| String and constant encryption | Transforms supported strings and integer or floating-point constants. | Plaintext or computed values may be visible when used; not every string is necessarily transformed. |
-| Rust string fingerprint replacement | Optionally replaces selected namespace and source-path text in eligible byte-array constants. | It is not symbol renaming, does not cover every constant, and may affect application-visible data. |
+In my [article about the patch][sublime], I investigated the executable and changed how it scanned folders. The patched editor kept the workspace shallow at startup and loaded a Git project when I expanded it. In my test with ten LLVM checkouts, memory after eight seconds fell from more than 305 MB and still growing to 139 MB.
 
-These are transformations, not encryption of the entire running program. The passes do not rewrite precompiled libraries. Rebuilding the standard library with the matching compiler and flags is a separate requirement for applying them to that code. A pass that helps one project may break another, so test the actual release and dependencies rather than assuming that more passes are always better.
+The example stayed with me because the change was possible without the editor's source code. I could observe a problem, trace it to behavior in the binary, and alter that behavior. The result was useful to me; it also showed how much a distributed executable can reveal to someone able to inspect and run it.
 
-## Release pipeline: cargo-rrea
+REA makes that kind of investigation easier to organize. The Sublime Text experience helped me think about what agent-assisted reverse engineering could mean for the software I publish.
 
-I built [cargo-rrea][rrea] to package these ideas as a Cargo subcommand. Its release pipeline selects an Arkari compiler, applies its enabled passes, strips metadata, renames eligible library files and ELF Rust dynamic symbols, and packs the runtime bundle using a modified UPX fork. Its default policy enables the implemented features; each is a separate source of friction, not an independent guarantee of protection.[^policy]
+## Wait.. I have the tool somewhere in my drawer..
 
-For a trusted Rust project, use:
+I had already worked on [rust_llvm-arkari_ollvm][arkari], which brings Arkari's obfuscation passes into Rust's LLVM toolchain. Obfuscation changes the compiled program so that some of its structure is less obvious to an analyst. The program still has to run, but the path from the executable back to a clear understanding of its logic can become less direct.
 
-```sh
-cargo install cargo-rrea --locked
-cargo rrea build --release
-```
+I built [cargo-rrea][rrea] to bring that idea into a Rust release workflow. It combines the obfuscating toolchain with other steps that make a release less convenient to inspect, including removing some metadata and packing the resulting artifacts. My goal is to make those measures usable as part of a build, rather than a collection of manual experiments after the fact.
 
-The tool requires native x86-64 Linux GNU or Windows MSVC, Rust/Cargo, Git, curl, CMake, Ninja, and a C++17 toolchain. It builds the bundled UPX fork during installation and acquires the compiler when needed. On Windows, the current documentation requires `cargo rrea build --release --no-mangle symbol`, because PE symbol renaming is not implemented. Linux application builds have runtime coverage; the complete Windows build pipeline remains unverified. Cross-compilation is not supported.[^policy]
+I do not expect a tool to make a program impossible to reverse engineer. A person who controls the machine can run it, observe it, and modify it. Packing can be reversed, and obfuscation can carry a cost in performance or compatibility. My [evaluation][evaluation] records both the behavior I tested and the costs I observed; the project documentation covers the build options and their limits.
 
-The output executables are under `target/release/`, with shared libraries in `target/release/libs/`. Distribute the complete `libs` directory with the executable, including `libs.manifest` on Windows. Reports and logs are under `rrea/dist-<id>/` in Cargo's target directory. System and arbitrary native shared libraries are not automatically bundled. Build scripts and procedural macros run during compilation, so this is not a sandbox for an untrusted project.[^policy]
+## The philosophy
 
-The layers have practical consequences:
+I am not trying to make reverse engineering disappear. My Sublime Text work is an example of why being able to understand and change software can be useful. At the same time, publishing an executable gives others an artifact they can study, including when their goals are different from mine.
 
-- **Stripping** removes selected debug and symbol information, but required dynamic interfaces and unwind information remain. `--no-strip` retains the project's settings instead.
-- **Name changes** make some library and symbol identities less obvious. On ELF, the symbol policy assumes a closed bundle; use `--keep-symbol NAME` for externally consumed or dynamically looked-up Rust names. Native interfaces must continue to work.
-- **Packing** makes the on-disk payload less directly readable. The default opaque mode is reversible scrambling, not encryption. The matching modified packer can recover the original payload, and loader structure can still identify a packed binary. Packing can also increase size.
-- **Runtime guard** in the Linux packer can terminate a program when an analysis-tool process name is visible, even if that tool is unrelated. This can affect legitimate users and debugging.
-- **Compatibility and licensing** require review before distribution. The pipeline uses `panic = "unwind"`, changes linkage and release settings, and may expose pass-specific bugs. My modified UPX and stubs have GPL-compatibility restrictions; check the actual license and your distribution obligations.[^policy]
+For me, defending against REA means taking that reality seriously. If agents make some investigations easier to start and coordinate, I want the release process to give me a way to make analysis more demanding. That is a question of cost and friction, not a promise that the binary holds a secret forever.
 
-If a layer breaks a project, the CLI offers targeted opt-outs such as `--no-fla` and `--no-upx`. Disabling a layer changes the resulting protection. Test the complete bundle on each supported platform, including external symbol lookup, errors, and the actual deployment environment.
-
-## What the measurements show
-
-My [native evaluation][evaluation] tested one Linux x86-64 Base116 command-line application with a baseline, stripped and packed baselines, and protected bundle variants. The snapshot predates default ELF symbol renaming. It checked 52 binary/wrapper cases and 20 malformed-input cases per variant, not every possible application behavior.
-
-On that workload, the baseline encoder had a 21.73 ms median and the protected, filename-mangled bundle had a 1,083.80 ms median. The corresponding decoder medians were 28.05 ms and 2,232.48 ms. The baseline was one 1,153,088-byte file; the protected bundle was 19 files totaling 5,968,316 bytes. These are measurements for one application and host, not general overhead estimates. The baseline used ordinary Rust linkage while the protected bundle used different linkage, so the difference cannot be attributed to LLVM passes alone.
-
-The same evaluation recovered every protected artifact byte-for-byte with the matching packer. In that older snapshot, exported Rust symbols still identified Base116 routines despite renamed library files. Ghidra imported all tested files, but imports of packed files primarily analyzed the visible loader. Import counts and timeouts are not a measure of whether an analyst recovered the algorithm. The study did not perform a blinded, matched reconstruction test, so it does not establish a protection score or a reverse-engineering slowdown.
-
-## Choose the boundary, then measure it
-
-Do not embed a secret in a client and assume an obfuscator can keep it secret. Put authorization decisions and long-lived secrets on a server you control when the product permits it. Minimize what the client receives, validate requests on the server, and use standard cryptography for data protection. A local check can improve user experience, but an attacker who controls the executable can alter that check.
-
-For code that must run locally, define the specific behavior or asset worth protecting. Build an ordinary release and a protected release from the same revision. Verify equivalent behavior, distribution contents, startup, memory, and representative workloads. Then give independent analysts the same task, tools, time budget, and prior information for both builds. Record correctness and time, not just whether a decompiler imports a file. Recheck after toolchain or dependency changes.
-
-My Arkari-based toolchain and cargo-rrea can add obstacles to static analysis. My evaluation also shows recoverable artifacts and potentially substantial costs. Use them as one layer in a threat model, not as a substitute for one.
-
-[^policy]: The [cargo-rrea architecture and feature contract][architecture] describes the switches, output layout, runtime behavior, and compatibility boundaries. Tool behavior can change between releases; check the documentation for the version you deploy.
+The distinction matters when deciding what belongs in the client. I would not rely on obfuscation to protect a long-lived secret or make a local authorization check authoritative. For logic that must run on someone else's machine, though, I still think it is reasonable to choose how much of its structure I expose and what trade-offs I am willing to accept to protect it.
 
 [rea]: https://github.com/morluto/rea
+[artcraft-report]: https://arstechnica.com/ai/2026/10/software-is-over-bold-ai-developer-takes-aim-at-adobe-with-open-source-clones/
+[photocraft]: https://github.com/storytold/photocraft
+[vectorcraft]: https://github.com/storytold/vectorcraft
+[filmcraft]: https://github.com/storytold/filmcraft
+[wordcraft]: https://github.com/storytold/wordcraft
+[gridcraft]: https://github.com/storytold/gridcraft
+[deckcraft]: https://github.com/storytold/deckcraft
 [sublime]: https://gist.github.com/ParkSnoopy/fb46d844323165998d7ddb930aaf544e
 [arkari]: https://github.com/ParkSnoopy/rust_llvm-arkari_ollvm
 [rrea]: https://github.com/ParkSnoopy/cargo-rrea
 [evaluation]: https://github.com/ParkSnoopy/cargo-rrea/blob/main/docs/evaluation.md
-[architecture]: https://github.com/ParkSnoopy/cargo-rrea/blob/main/docs/architecture.md
