@@ -23,6 +23,15 @@
   right: 10px;
 }
 
+/* Page and post titles: the theme draws two rows of dots under them. One thin solid line
+   is easier on the eye. */
+.post-title {
+  border-bottom: 1px solid var(--accent);
+}
+.post-title::after {
+  content: none;
+}
+
 /* Releases page. */
 .release {
   margin: 2rem 0;
