@@ -1,9 +1,9 @@
-/* Fira Code: https://github.com/tonsky/FiraCode */
-@import url('https://cdn.staticdelivr.com/gfonts/css2?family=Fira+Code:wght@300..700&display=swap');
+/* JetBrains Mono: https://github.com/JetBrains/JetBrainsMono */
+@import url('https://cdn.staticdelivr.com/gfonts/css2?family=JetBrains+Mono:wght@300..700&display=swap');
 
 :root {
   --background: #000000;
-  --foreground: #f6f5f4;
+  --foreground: #ffffff;
   --accent: #2ec27e;
   --radius: 0;
   --font-size: 1rem;
@@ -24,7 +24,6 @@ html {
 
 body {
   font-family:
-    "Fira Code",
     "JetBrains Mono",
     Monaco,
     Consolas,
@@ -251,7 +250,6 @@ ol li {
 code,
 kbd {
   font-family:
-    "Fira Code",
     "JetBrains Mono",
     Monaco,
     Consolas,
