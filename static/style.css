@@ -1,0 +1,64 @@
+/* Releases page. Loaded after terminal.css by the head partial. */
+.release {
+  margin: 2rem 0;
+}
+.release-meta {
+  margin: 0 0 0.5rem;
+  opacity: 0.7;
+}
+.platforms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.platforms li {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.4rem 0;
+  border-top: 1px dashed currentColor;
+}
+.platforms li::before {
+  content: none;
+}
+.platform {
+  flex: 0 0 6rem;
+  font-weight: bold;
+}
+.files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.dl {
+  display: inline-block;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--accent, currentColor);
+  color: var(--accent, inherit);
+  text-decoration: none;
+}
+.dl small {
+  opacity: 0.7;
+}
+a.dl:hover,
+a.dl:focus-visible {
+  background: var(--accent, currentColor);
+  color: var(--background, #000);
+}
+a.dl:hover small,
+a.dl:focus-visible small {
+  opacity: 1;
+}
+.dl.disabled {
+  border-style: dashed;
+  border-color: currentColor;
+  color: inherit;
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+@media (max-width: 600px) {
+  .platforms li {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+}

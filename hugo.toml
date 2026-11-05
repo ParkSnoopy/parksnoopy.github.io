@@ -10,7 +10,7 @@ pagination.pagerSize = 5
 
 [params]
   contentTypeName = "posts"
-  showMenuItems = 3
+  showMenuItems = 4
   fullWidthTheme = false
   centerTheme = false
   subtitle = "Builder of small tools. Rust, Go, containers."
@@ -42,3 +42,8 @@ pagination.pagerSize = 5
     name = "Tools"
     url = "/tools/"
     weight = 3
+  [[menu.main]]
+    identifier = "releases"
+    name = "Releases"
+    url = "/releases/"
+    weight = 4
