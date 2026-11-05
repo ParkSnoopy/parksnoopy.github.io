@@ -3,7 +3,6 @@
   --bg: #000;
   --fg: #f6f5f4;
   --accent: #2ec27e;
-  --button-fg: #fff;
   --button-active-fg: #000;
   --dim: #8a8a8a;
   --err: #ff6b6b;
@@ -18,7 +17,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font:
-    16px/1.54 "Fira Code",
+    16px / 1.54 "Fira Code",
     "JetBrains Mono",
     Consolas,
     monospace;
@@ -37,7 +36,6 @@ h1 {
   color: var(--err);
   min-height: 1.5em;
 }
-button,
 input,
 select {
   font: inherit;
@@ -47,41 +45,39 @@ select {
   padding: 0.4rem 0.8rem;
   border-radius: 0;
 }
-button {
+/* The Terminal.css button: bold, 4px accent border, and a faint accent tint on hover. */
+button,
+input[type="file"]::file-selector-button {
+  position: relative;
+  font: inherit;
+  font-weight: bold;
+  text-align: center;
+  background: transparent;
+  color: var(--accent);
+  padding: 5px 18px;
+  border: 4px solid var(--accent);
+  border-radius: 0;
+  transition: background 0.15s linear;
+  appearance: none;
   cursor: pointer;
-  color: var(--button-fg);
   -webkit-tap-highlight-color: transparent;
+}
+input[type="file"]::file-selector-button {
+  margin-right: 0.8rem;
 }
 /* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
 @media (hover: hover) {
-  button:hover:not(:disabled):not(#reset) {
-    background: var(--accent);
-    color: var(--button-active-fg);
+  button:hover:not(:disabled):not(#reset),
+  input[type="file"]::file-selector-button:hover {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
   }
   #reset:active {
-    background: var(--accent);
-    color: var(--button-active-fg);
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
   }
 }
 button:disabled {
   opacity: 0.4;
   cursor: default;
-}
-input[type="file"]::file-selector-button {
-  font: inherit;
-  color: var(--button-fg);
-  background: var(--bg);
-  border: 1px solid var(--accent);
-  border-radius: 0;
-  padding: 0.4rem 0.8rem;
-  margin-right: 0.8rem;
-  cursor: pointer;
-}
-@media (hover: hover) {
-  input[type="file"]::file-selector-button:hover {
-    background: var(--accent);
-    color: var(--button-active-fg);
-  }
 }
 input[type="number"] {
   appearance: textfield;
@@ -91,10 +87,13 @@ input[type="number"]::-webkit-outer-spin-button {
   appearance: none;
   margin: 0;
 }
-button:focus-visible,
 input:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:focus-visible {
+  outline: 1px solid var(--accent);
   outline-offset: 2px;
 }
 label {
