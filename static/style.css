@@ -32,9 +32,17 @@
   content: none;
 }
 
+/* A visible line after every entry in a list. The theme's own line is only 10% bright. */
+.post:not(:last-of-type),
+.release:not(:last-of-type) {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
 /* Releases page. */
 .release {
-  margin: 2rem 0;
+  margin: 0;
+  padding: 2rem 0;
 }
 .release-meta {
   margin: 0 0 0.5rem;
