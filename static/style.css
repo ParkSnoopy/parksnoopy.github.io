@@ -1,4 +1,29 @@
-/* Releases page. Loaded after terminal.css by the head partial. */
+/* Loaded after terminal.css by the head partial. */
+
+/* Site header, as on the Terminal.css page: a plain underlined title, a gap, then a line of
+   thin bars. The theme's filled accent block and its wider, full-height bars are replaced. */
+.logo {
+  background: transparent;
+  color: var(--foreground);
+  padding: 0;
+  text-transform: uppercase;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: calc(var(--font-size) * 0.2);
+}
+.header__logo::after {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--accent),
+    var(--accent) 2px,
+    transparent 0,
+    transparent 8px
+  );
+  margin-left: 20px;
+  right: 10px;
+}
+
+/* Releases page. */
 .release {
   margin: 2rem 0;
 }
