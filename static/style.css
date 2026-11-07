@@ -110,7 +110,15 @@ a.dl:focus-visible {
 }
 @media (max-width: 600px) {
   .platforms li {
-    flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.5rem;
+  }
+  .platform {
+    flex-basis: 5rem;
+  }
+  .files {
+    min-width: 0;
+  }
+  .dl {
+    padding-inline: 8px;
   }
 }
