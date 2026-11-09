@@ -1,4 +1,5 @@
 ---
+
 title: "QR file share"
 date: 2026-11-03
 description: "Send a file between two screens with animated QR codes. No network, no server."

@@ -1,4 +1,5 @@
 ---
+
 title: "Defending Against REA (Reverse Engineer Anything)"
 date: 2026-11-03
 description: "Why agent-assisted reverse engineering changed how I think about distributing software, and what I built in response."

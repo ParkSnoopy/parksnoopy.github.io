@@ -1,4 +1,5 @@
 ---
+
 title: "Portfolio"
 description: "Hand-written web servers, small Rust tools, and a few things I built for myself."
 ---
@@ -104,16 +105,16 @@ This site is deployed by GitHub Actions too.
 
 ## Selected projects
 
-| Project | What it is |
-| --- | --- |
-| [AppOnRailway](https://github.com/ParkSnoopy/AppOnRailway) | My first web app, hosted on Railway |
-| [MyShareServer](https://github.com/ParkSnoopy/MyShareServer) | My first share server, written by hand |
-| [captcha-gen](https://github.com/ParkSnoopy/captcha-gen) | Captcha image generator |
-| [captcha-solver](https://github.com/ParkSnoopy/captcha-solver) | Captcha image solver |
-| [rdp-shutdown](https://github.com/ParkSnoopy/rdp-shutdown) | Timed shutdown for RDP machines |
-| [rand_base64](https://github.com/ParkSnoopy/rand_base64) | Random base64 generator |
-| [django-shareserver](https://github.com/ParkSnoopy/django-shareserver) | Share server, Django version |
-| [shareserver](https://github.com/ParkSnoopy/shareserver) | Share server, Go version with browser-side encryption |
-| [debian-slim-zsh](https://github.com/ParkSnoopy/debian-slim-zsh) | Debian development container with zsh |
-| [Love](https://github.com/ParkSnoopy/Love) | Offline Bible app |
-| [pku-elective-prettify](https://github.com/ParkSnoopy/pku-elective-prettify) | Colored timetable generator |
+| Project                                                                      | What it is                                            |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------- |
+| [AppOnRailway](https://github.com/ParkSnoopy/AppOnRailway)                   | My first web app, hosted on Railway                   |
+| [MyShareServer](https://github.com/ParkSnoopy/MyShareServer)                 | My first share server, written by hand                |
+| [captcha-gen](https://github.com/ParkSnoopy/captcha-gen)                     | Captcha image generator                               |
+| [captcha-solver](https://github.com/ParkSnoopy/captcha-solver)               | Captcha image solver                                  |
+| [rdp-shutdown](https://github.com/ParkSnoopy/rdp-shutdown)                   | Timed shutdown for RDP machines                       |
+| [rand_base64](https://github.com/ParkSnoopy/rand_base64)                     | Random base64 generator                               |
+| [django-shareserver](https://github.com/ParkSnoopy/django-shareserver)       | Share server, Django version                          |
+| [shareserver](https://github.com/ParkSnoopy/shareserver)                     | Share server, Go version with browser-side encryption |
+| [debian-slim-zsh](https://github.com/ParkSnoopy/debian-slim-zsh)             | Debian development container with zsh                 |
+| [Love](https://github.com/ParkSnoopy/Love)                                   | Offline Bible app                                     |
+| [pku-elective-prettify](https://github.com/ParkSnoopy/pku-elective-prettify) | Colored timetable generator                           |

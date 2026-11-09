@@ -1,4 +1,5 @@
 ---
+
 title: "Sample Tool 2"
 date: 2026-11-02
 description: "Duis aute irure dolor in reprehenderit in voluptate."

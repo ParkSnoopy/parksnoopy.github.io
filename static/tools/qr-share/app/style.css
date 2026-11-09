@@ -1,216 +1,216 @@
 :root {
-  color-scheme: dark;
-  --bg: #000;
-  --fg: #f6f5f4;
-  --accent: #2ec27e;
-  --button-active-fg: #000;
-  --dim: #8a8a8a;
-  --err: #ff6b6b;
+	color-scheme: dark;
+	--bg: #000;
+	--fg: #f6f5f4;
+	--accent: #2ec27e;
+	--button-active-fg: #000;
+	--dim: #8a8a8a;
+	--err: #ff6b6b;
 }
 * {
-  box-sizing: border-box;
+	box-sizing: border-box;
 }
 body {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 1rem;
-  background: var(--bg);
-  color: var(--fg);
-  font:
-    16px / 1.54 "Fira Code",
-    "JetBrains Mono",
-    Consolas,
-    monospace;
+	max-width: 760px;
+	margin: 0 auto;
+	padding: 1rem;
+	background: var(--bg);
+	color: var(--fg);
+	font:
+		16px / 1.54 "Fira Code",
+		"JetBrains Mono",
+		Consolas,
+		monospace;
 }
 a {
-  color: var(--accent);
+	color: var(--accent);
 }
 h1 {
-  font-size: 1.45rem;
-  margin: 0.5rem 0;
+	font-size: 1.45rem;
+	margin: 0.5rem 0;
 }
 .dim {
-  color: var(--dim);
+	color: var(--dim);
 }
 .error {
-  color: var(--err);
-  min-height: 1.5em;
+	color: var(--err);
+	min-height: 1.5em;
 }
 nav {
-  display: flex;
-  gap: 0.5rem;
-  margin: 1rem 0;
+	display: flex;
+	gap: 0.5rem;
+	margin: 1rem 0;
 }
 input,
 select {
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--accent);
-  padding: 0.4rem 0.8rem;
-  border-radius: 0;
+	font: inherit;
+	color: var(--fg);
+	background: var(--bg);
+	border: 1px solid var(--accent);
+	padding: 0.4rem 0.8rem;
+	border-radius: 0;
 }
 /* The Terminal.css button: bold, 4px accent border, and a faint accent tint on hover. */
 button,
 input[type="file"]::file-selector-button {
-  position: relative;
-  font: inherit;
-  font-weight: bold;
-  text-align: center;
-  background: transparent;
-  color: var(--accent);
-  padding: 5px 18px;
-  border: 4px solid var(--accent);
-  border-radius: 0;
-  transition: background 0.15s linear;
-  appearance: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+	position: relative;
+	font: inherit;
+	font-weight: bold;
+	text-align: center;
+	background: transparent;
+	color: var(--accent);
+	padding: 5px 18px;
+	border: 4px solid var(--accent);
+	border-radius: 0;
+	transition: background 0.15s linear;
+	appearance: none;
+	cursor: pointer;
+	-webkit-tap-highlight-color: transparent;
 }
 input[type="file"]::file-selector-button {
-  margin-right: 0.8rem;
+	margin-right: 0.8rem;
 }
 .tab.active {
-  background: var(--accent);
-  color: var(--button-active-fg);
+	background: var(--accent);
+	color: var(--button-active-fg);
 }
 /* Touch screens keep :hover after a tap, which makes a pressed button look selected. */
 @media (hover: hover) {
-  button:hover:not(:disabled):not(#reset),
-  input[type="file"]::file-selector-button:hover {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-  }
-  #reset:active {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-  }
+	button:hover:not(:disabled):not(#reset),
+	input[type="file"]::file-selector-button:hover {
+		background: color-mix(in srgb, var(--accent) 15%, transparent);
+	}
+	#reset:active {
+		background: color-mix(in srgb, var(--accent) 15%, transparent);
+	}
 }
 button:disabled {
-  opacity: 0.4;
-  cursor: default;
+	opacity: 0.4;
+	cursor: default;
 }
 input[type="number"] {
-  appearance: textfield;
+	appearance: textfield;
 }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
-  appearance: none;
-  margin: 0;
+	appearance: none;
+	margin: 0;
 }
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
 }
 button:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
+	outline: 1px solid var(--accent);
+	outline-offset: 2px;
 }
 label {
-  display: block;
-  margin: 0.5rem 0;
+	display: block;
+	margin: 0.5rem 0;
 }
 label input,
 label select {
-  display: block;
-  width: 100%;
-  margin-top: 0.25rem;
+	display: block;
+	width: 100%;
+	margin-top: 0.25rem;
 }
 .row {
-  display: flex;
-  gap: 1rem;
-  align-items: flex-end;
-  flex-wrap: wrap;
+	display: flex;
+	gap: 1rem;
+	align-items: flex-end;
+	flex-wrap: wrap;
 }
 .row label {
-  flex: 1 1 12rem;
+	flex: 1 1 12rem;
 }
 .shown,
 .video {
-  display: flex;
-  justify-content: center;
-  margin: 1rem 0;
+	display: flex;
+	justify-content: center;
+	margin: 1rem 0;
 }
 /* The script sizes the code so its cells are as large as the screen allows. The white
    margin around each QR code is part of the picture and must stay white. */
 #code {
-  background: #fff;
-  cursor: zoom-in;
+	background: #fff;
+	cursor: zoom-in;
 }
 .shown:fullscreen {
-  align-items: center;
-  margin: 0;
-  background: #000;
+	align-items: center;
+	margin: 0;
+	background: #000;
 }
 .shown:fullscreen #code {
-  cursor: zoom-out;
+	cursor: zoom-out;
 }
 /* Only shown in full screen, where it sits in a corner outside the code. */
 .osd {
-  display: none;
-  position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  padding: 0.2rem 0.5rem;
-  background: rgba(0, 0, 0, 0.75);
-  color: var(--accent);
-  font-size: 0.9rem;
+	display: none;
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	padding: 0.2rem 0.5rem;
+	background: rgba(0, 0, 0, 0.75);
+	color: var(--accent);
+	font-size: 0.9rem;
 }
 .shown:fullscreen .osd.on {
-  display: block;
+	display: block;
 }
 /* With zoom on offer, two fingers on the picture pinch it, so the page must not take them. */
 .video.zoomable {
-  touch-action: none;
+	touch-action: none;
 }
 video {
-  width: 100%;
-  max-height: 60vh;
-  background: #111;
+	width: 100%;
+	max-height: 60vh;
+	background: #111;
 }
 pre {
-  white-space: pre-wrap;
-  word-break: break-all;
+	white-space: pre-wrap;
+	word-break: break-all;
 }
 .code {
-  font-size: 1.4rem;
-  color: var(--accent);
-  border: 1px dashed var(--accent);
-  padding: 0.5rem;
+	font-size: 1.4rem;
+	color: var(--accent);
+	border: 1px dashed var(--accent);
+	padding: 0.5rem;
 }
 /* The receiver, once it has found a sender, is one screen tall: the picture takes what the
    other parts leave, and nothing scrolls. These rules come last so they win over the plain
    ones above. */
 #receive.popper {
-  position: fixed;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 0.5rem;
-  overflow: hidden;
-  background: var(--bg);
-  font-size: 0.85rem;
-  line-height: 1.3;
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	max-width: 760px;
+	margin: 0 auto;
+	padding: 0.5rem;
+	overflow: hidden;
+	background: var(--bg);
+	font-size: 0.85rem;
+	line-height: 1.3;
 }
 #receive.popper[hidden] {
-  display: none;
+	display: none;
 }
 #receive.popper .video {
-  flex: 1 1 0;
-  min-height: 0;
-  margin: 0;
+	flex: 1 1 0;
+	min-height: 0;
+	margin: 0;
 }
 #receive.popper video {
-  height: 100%;
-  max-height: 100%;
-  object-fit: contain;
+	height: 100%;
+	max-height: 100%;
+	object-fit: contain;
 }
 #receive.popper p,
 #receive.popper pre,
 #receive.popper label {
-  margin: 0;
-  overflow: hidden;
+	margin: 0;
+	overflow: hidden;
 }

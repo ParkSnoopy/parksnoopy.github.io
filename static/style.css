@@ -3,130 +3,130 @@
 /* Site header, as on the Terminal.css page: a plain underlined title, a gap, then a line of
    thin bars. The theme's filled accent block and its wider, full-height bars are replaced. */
 .logo {
-  background: transparent;
-  color: var(--foreground);
-  padding: 0;
-  text-transform: uppercase;
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: calc(var(--font-size) * 0.2);
+	background: transparent;
+	color: var(--foreground);
+	padding: 0;
+	text-transform: uppercase;
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: calc(var(--font-size) * 0.2);
 }
 .header__logo::after {
-  background: repeating-linear-gradient(
-    90deg,
-    var(--accent),
-    var(--accent) 2px,
-    transparent 0,
-    transparent 8px
-  );
-  margin-left: 20px;
-  right: 10px;
+	background: repeating-linear-gradient(
+		90deg,
+		var(--accent),
+		var(--accent) 2px,
+		transparent 0,
+		transparent 8px
+	);
+	margin-left: 20px;
+	right: 10px;
 }
 
 /* Expanded menu entries size horizontally instead of wrapping. */
 .menu__dropdown {
-  width: max-content;
+	width: max-content;
 }
 .menu__dropdown a {
-  white-space: nowrap;
+	white-space: nowrap;
 }
 
 /* Page and post titles: the theme draws two rows of dots under them. One thin solid line
    is easier on the eye. */
 .post-title {
-  border-bottom: 1px solid var(--accent);
+	border-bottom: 1px solid var(--accent);
 }
 .post-title::after {
-  content: none;
+	content: none;
 }
 
 /* A visible line after every entry in a list. The theme's own line is only 10% bright. */
 .post:not(:last-of-type),
 .release:not(:last-of-type) {
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--foreground) 40%, transparent);
+	border-bottom: 1px solid
+		color-mix(in srgb, var(--foreground) 40%, transparent);
 }
 
 /* Releases page. */
 .release {
-  margin: 0;
-  padding: 2rem 0;
+	margin: 0;
+	padding: 2rem 0;
 }
 .release-meta {
-  margin: 0 0 0.5rem;
-  opacity: 0.7;
+	margin: 0 0 0.5rem;
+	opacity: 0.7;
 }
 .platforms {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+	list-style: none;
+	margin: 0;
+	padding: 0;
 }
 .platforms li {
-  display: flex;
-  gap: 1rem;
-  align-items: baseline;
-  padding: 0.4rem 0;
-  border-top: 1px dashed currentColor;
+	display: flex;
+	gap: 1rem;
+	align-items: baseline;
+	padding: 0.4rem 0;
+	border-top: 1px dashed currentColor;
 }
 .platforms li::before {
-  content: none;
+	content: none;
 }
 .platform {
-  flex: 0 0 6rem;
-  font-weight: bold;
+	flex: 0 0 6rem;
+	font-weight: bold;
 }
 .files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
 }
 /* Same look as the Terminal.css button: bold, 4px accent border, and a faint accent tint
    on hover while the text stays accent-coloured. */
 .dl {
-  display: inline-block;
-  font-weight: bold;
-  text-align: center;
-  text-decoration: none;
-  background: transparent;
-  color: var(--accent);
-  padding: 5px 18px;
-  border: 4px solid var(--accent);
-  border-radius: var(--radius);
-  transition: background 0.15s linear;
+	display: inline-block;
+	font-weight: bold;
+	text-align: center;
+	text-decoration: none;
+	background: transparent;
+	color: var(--accent);
+	padding: 5px 18px;
+	border: 4px solid var(--accent);
+	border-radius: var(--radius);
+	transition: background 0.15s linear;
 }
 .dl small {
-  font-weight: normal;
-  opacity: 0.7;
+	font-weight: normal;
+	opacity: 0.7;
 }
 a.dl {
-  cursor: pointer;
+	cursor: pointer;
 }
 a.dl:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  text-decoration: none;
+	background: color-mix(in srgb, var(--accent) 15%, transparent);
+	text-decoration: none;
 }
 a.dl:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
+	outline: 1px solid var(--accent);
+	outline-offset: 2px;
 }
 .dl.disabled {
-  border-style: dashed;
-  border-color: currentColor;
-  color: inherit;
-  opacity: 0.35;
-  cursor: not-allowed;
+	border-style: dashed;
+	border-color: currentColor;
+	color: inherit;
+	opacity: 0.35;
+	cursor: not-allowed;
 }
 @media (max-width: 600px) {
-  .platforms li {
-    gap: 0.5rem;
-  }
-  .platform {
-    flex-basis: 5rem;
-  }
-  .files {
-    min-width: 0;
-  }
-  .dl {
-    padding-inline: 8px;
-  }
+	.platforms li {
+		gap: 0.5rem;
+	}
+	.platform {
+		flex-basis: 5rem;
+	}
+	.files {
+		min-width: 0;
+	}
+	.dl {
+		padding-inline: 8px;
+	}
 }

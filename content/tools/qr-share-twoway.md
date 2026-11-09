@@ -1,4 +1,5 @@
 ---
+
 title: "QR file share TwoWay"
 date: 2026-11-04
 description: "QR file share where both devices watch each other with their cameras. No buttons to pick a role."

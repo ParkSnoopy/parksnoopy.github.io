@@ -1,4 +1,5 @@
 ---
+
 title: "Sample Tool 3"
 date: 2026-11-01
 description: "Sed ut perspiciatis unde omnis iste natus error."
