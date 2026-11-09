@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # The releases page is read from GitHub at build time, so rebuild daily.
-    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -40,8 +37,6 @@ jobs:
         uses: actions/configure-pages@v6
 
       - name: Build
-        env:
-          HUGO_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
 
       - uses: actions/upload-pages-artifact@v5

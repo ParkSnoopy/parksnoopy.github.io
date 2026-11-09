@@ -23,6 +23,14 @@
   right: 10px;
 }
 
+/* Expanded menu entries size horizontally instead of wrapping. */
+.menu__dropdown {
+  width: max-content;
+}
+.menu__dropdown a {
+  white-space: nowrap;
+}
+
 /* Page and post titles: the theme draws two rows of dots under them. One thin solid line
    is easier on the eye. */
 .post-title {

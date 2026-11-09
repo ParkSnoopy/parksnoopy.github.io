@@ -13,5 +13,5 @@ projects:
 ---
 
 Every link below downloads the file straight away.
-The list is read from my GitHub releases when the site is built, and the site is rebuilt every day.
+The latest downloads are loaded from GitHub whenever you open this page.
 A greyed-out button means I have not published that build.

@@ -1,100 +1,23 @@
-{{- /*
-  Lists the newest release of each project in front matter `projects`, one block per
-  project, one row per platform. The data comes from the GitHub API at build time.
-  Asset names look like Name_v1.2.3-amd64-Linux.tar.gz or ...-arm64-iOS_Simulator.zip.
-*/ -}}
 {{ define "main" }}
-{{- $repo := .Params.repo -}}
-{{- $headers := dict "Accept" "application/vnd.github+json" -}}
-{{- with os.Getenv "HUGO_GITHUB_TOKEN" -}}
-  {{- $headers = merge $headers (dict "Authorization" (printf "Bearer %s" .)) -}}
-{{- end -}}
-{{- $url := printf "https://api.github.com/repos/%s/releases?per_page=100" $repo -}}
-{{- $releases := slice -}}
-{{- with try (resources.GetRemote $url (dict "headers" $headers)) -}}
-  {{- with .Err -}}
-    {{- errorf "Could not read the release list from %s: %s" $url . -}}
-  {{- else with .Value -}}
-    {{- $releases = .Content | transform.Unmarshal -}}
-  {{- else -}}
-    {{- errorf "No release list came back from %s" $url -}}
-  {{- end -}}
-{{- end -}}
-
-{{- $groups := slice
-  (dict "key" "Linux" "label" "Linux")
-  (dict "key" "Windows" "label" "Windows")
-  (dict "key" "Android" "label" "Android")
-  (dict "key" "macOS" "label" "macOS")
-  (dict "key" "" "label" "Others")
--}}
-
 <article class="post">
   <h1 class="post-title">{{ .Title }}</h1>
   <div class="post-content">
     {{ .Content }}
-
-    {{ range .Params.projects }}
-      {{- $project := . -}}
-      {{- /* Stable track: the API lists releases newest first, so the first non-draft,
-             non-prerelease whose tag is <slug>-<commit> is the latest one. No tag is
-             written down here, only the project slug. */ -}}
-      {{- $release := dict -}}
-      {{- range $releases -}}
-        {{- if and (not $release) (not .draft) (not .prerelease) (eq (replaceRE `-[0-9a-f]{7,40}$` "" .tag_name) $project.slug) -}}
-          {{- $release = . -}}
-        {{- end -}}
-      {{- end -}}
-      {{- $assets := slice -}}
-      {{- with $release -}}
-        {{- $assets = .assets -}}
-      {{- end -}}
-
-      <section class="release">
-        <h2>{{ $project.name }}</h2>
-        {{ with $release }}
-          <p class="release-meta">
-            {{ index (findRE `v[0-9][^ ]*` .name) 0 | default .tag_name }}
-            · {{ time.AsTime .published_at | time.Format "2006-01-02" }}
-          </p>
-        {{ else }}
-          <p class="release-meta">No release yet.</p>
-        {{ end }}
-
-        <ul class="platforms">
-          {{ range $groups }}
-            {{- $group := . -}}
-            {{- $files := slice -}}
-            {{- range sort $assets "name" -}}
-              {{- $m := findRESubmatch `^.+-([^-]+)-([A-Za-z]+)(?:_([A-Za-z]+))?\.(.+)$` .name -}}
-              {{- if $m -}}
-                {{- $p := index $m 0 -}}
-                {{- $platform := index $p 2 -}}
-                {{- $known := in (slice "Linux" "Windows" "Android" "macOS") $platform -}}
-                {{- if or (eq $platform $group.key) (and (eq $group.key "") (not $known)) -}}
-                  {{- $parts := slice -}}
-                  {{- if eq $group.key "" -}}{{- $parts = $parts | append $platform -}}{{- end -}}
-                  {{- with index $p 3 -}}{{- $parts = $parts | append . -}}{{- end -}}
-                  {{- $parts = $parts | append (index $p 1) (index $p 4) -}}
-                  {{- $size := printf "%.1f MiB" (div (float .size) 1048576) -}}
-                  {{- $files = $files | append (dict "text" (delimit $parts " · ") "size" $size "url" .browser_download_url) -}}
-                {{- end -}}
-              {{- end -}}
-            {{- end }}
-            <li>
-              <span class="platform">{{ $group.label }}</span>
-              <span class="files">
-                {{ range $files }}
-                  <a class="dl" href="{{ .url }}" download>{{ .text }} <small>{{ .size }}</small></a>
-                {{ else }}
-                  <span class="dl disabled" aria-disabled="true">Not available</span>
-                {{ end }}
-              </span>
-            </li>
-          {{ end }}
-        </ul>
-      </section>
-    {{ end }}
+    <div data-release-repo="{{ .Params.repo }}" aria-busy="false">
+      <p data-release-status role="status" hidden></p>
+      {{ range .Params.projects }}
+        <section class="release" data-project="{{ .slug }}">
+          <h2>{{ .name }}</h2>
+          <p class="release-meta"></p>
+          <ul class="platforms" hidden></ul>
+        </section>
+      {{ end }}
+    </div>
+    <noscript>
+      <p>Enable JavaScript to load downloads, or
+        <a href="https://github.com/{{ .Params.repo }}/releases">view releases on GitHub</a>.</p>
+    </noscript>
   </div>
 </article>
+<script type="module" src="{{ "releases.js" | relURL }}"></script>
 {{ end }}
