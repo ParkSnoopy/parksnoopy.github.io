@@ -28,11 +28,6 @@ pagination.pagerSize = 5
 
 [menu]
   [[menu.main]]
-    identifier = "portfolio"
-    name = "Portfolio"
-    url = "/portfolio/"
-    weight = 1
-  [[menu.main]]
     identifier = "posts"
     name = "Posts"
     url = "/posts/"
