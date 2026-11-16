@@ -1,7 +1,42 @@
 const platforms = ["Linux", "Windows", "Android", "macOS", "Others"];
+const messages = {
+	en: {
+		limit: "GitHub's request limit was reached. Please try again later.",
+		http: (status) => `Could not load releases from GitHub (HTTP ${status}).`,
+		invalid: "GitHub returned an invalid release list.",
+		empty: "No release yet.",
+		unavailable: "Not available",
+		others: "Others",
+		loading: "Loading releases…",
+		timeout: "GitHub took too long to respond.",
+		offline: "Could not connect to GitHub.",
+		github: "View releases on GitHub",
+		retry: "Retry",
+	},
+	ko: {
+		limit: "GitHub 요청 한도에 도달했습니다. 나중에 다시 시도하세요.",
+		http: (status) =>
+			`GitHub에서 릴리스를 불러오지 못했습니다 (HTTP ${status}).`,
+		invalid: "GitHub에서 잘못된 릴리스 목록을 반환했습니다.",
+		empty: "아직 릴리스가 없습니다.",
+		unavailable: "미제공",
+		others: "기타",
+		loading: "릴리스를 불러오는 중…",
+		timeout: "GitHub 응답 시간이 초과되었습니다.",
+		offline: "GitHub에 연결하지 못했습니다.",
+		github: "GitHub에서 릴리스 보기",
+		retry: "다시 시도",
+	},
+};
 
 // GitHub returns releases newest first. Keep the existing stable <slug>-<SHA> track.
-export async function fetchReleases(repo, slugs, fetcher = fetch) {
+export async function fetchReleases(
+	repo,
+	slugs,
+	fetcher = fetch,
+	language = "en",
+) {
+	const text = messages[language] || messages.en;
 	const latest = new Map();
 	for (let page = 1; ; page++) {
 		const response = await fetcher(
@@ -19,17 +54,12 @@ export async function fetchReleases(repo, slugs, fetcher = fetch) {
 				(response.status === 403 &&
 					response.headers.get("x-ratelimit-remaining") === "0")
 			) {
-				throw new Error(
-					"GitHub's request limit was reached. Please try again later.",
-				);
+				throw new Error(text.limit);
 			}
-			throw new Error(
-				`Could not load releases from GitHub (HTTP ${response.status}).`,
-			);
+			throw new Error(text.http(response.status));
 		}
 		const releases = await response.json();
-		if (!Array.isArray(releases))
-			throw new Error("GitHub returned an invalid release list.");
+		if (!Array.isArray(releases)) throw new Error(text.invalid);
 		for (const release of releases) {
 			if (
 				release.draft ||
@@ -86,10 +116,10 @@ export function packageFiles(assets, repo) {
 	return groups;
 }
 
-function renderRelease(section, release, repo) {
+function renderRelease(section, release, repo, text) {
 	section.querySelector(".release-meta").textContent = release
 		? `${release.name?.match(/v[0-9][^ ]*/)?.[0] || release.tag_name} · ${release.published_at.slice(0, 10)}`
-		: "No release yet.";
+		: text.empty;
 	const list = section.querySelector(".platforms");
 	const rows = [];
 	for (const [platform, packages] of packageFiles(
@@ -99,7 +129,7 @@ function renderRelease(section, release, repo) {
 		const row = document.createElement("li");
 		const label = document.createElement("span");
 		label.className = "platform";
-		label.textContent = platform;
+		label.textContent = platform === "Others" ? text.others : platform;
 		const files = document.createElement("span");
 		files.className = "files";
 		for (const file of packages) {
@@ -117,7 +147,7 @@ function renderRelease(section, release, repo) {
 			const unavailable = document.createElement("span");
 			unavailable.className = "dl disabled";
 			unavailable.setAttribute("aria-disabled", "true");
-			unavailable.textContent = "Not available";
+			unavailable.textContent = text.unavailable;
 			files.append(unavailable);
 		}
 		row.append(label, files);
@@ -129,34 +159,38 @@ function renderRelease(section, release, repo) {
 
 export async function loadReleases(root) {
 	const repo = root.dataset.releaseRepo;
+	const language = root.dataset.language;
+	const text = messages[language] || messages.en;
 	const sections = [...root.querySelectorAll("[data-project]")];
 	const status = root.querySelector("[data-release-status]");
 	root.setAttribute("aria-busy", "true");
 	status.hidden = false;
-	status.textContent = "Loading releases…";
+	status.textContent = text.loading;
 	try {
 		const releases = await fetchReleases(
 			repo,
 			sections.map((section) => section.dataset.project),
+			fetch,
+			language,
 		);
 		for (const section of sections)
-			renderRelease(section, releases.get(section.dataset.project), repo);
+			renderRelease(section, releases.get(section.dataset.project), repo, text);
 		status.textContent = "";
 		status.hidden = true;
 	} catch (error) {
 		const message =
 			error.name === "TimeoutError"
-				? "GitHub took too long to respond."
+				? text.timeout
 				: error instanceof TypeError
-					? "Could not connect to GitHub."
+					? text.offline
 					: error.message;
 		status.textContent = `${message} `;
 		const github = document.createElement("a");
 		github.href = `https://github.com/${repo}/releases`;
-		github.textContent = "View releases on GitHub";
+		github.textContent = text.github;
 		const retry = document.createElement("button");
 		retry.type = "button";
-		retry.textContent = "Retry";
+		retry.textContent = text.retry;
 		retry.addEventListener("click", () => loadReleases(root), { once: true });
 		status.append(github, " ", retry);
 	} finally {

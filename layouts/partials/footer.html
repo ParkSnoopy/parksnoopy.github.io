@@ -1,0 +1,23 @@
+<footer class="footer">
+  <div class="footer__inner">
+    {{ if .Site.Copyright }}
+      <div class="copyright copyright--user">
+        <span>{{ .Site.Copyright | safeHTML }}</span>
+    {{ else }}
+      <div class="copyright">
+        <span>© {{ now.Year }} {{ if eq .Language.Lang "ko" }}<a href="https://gohugo.io">Hugo</a>로 제작{{ else }}Powered by <a href="https://gohugo.io">Hugo</a>{{ end }}</span>
+    {{ end }}
+      <span>:: {{ if eq .Language.Lang "ko" }}<a href="https://github.com/panr/hugo-theme-terminal" target="_blank">테마</a> 제작: <a href="https://github.com/panr" target="_blank">panr</a>{{ else }}<a href="https://github.com/panr/hugo-theme-terminal" target="_blank">Theme</a> made by <a href="https://github.com/panr" target="_blank">panr</a>{{ end }}</span>
+      </div>
+  </div>
+</footer>
+
+{{ $menu := resources.Get "js/menu.js" | js.Build }}
+{{ $cp := resources.Get "js/code.js" | js.Build }}
+
+{{ $bundle := slice $menu $cp | resources.Concat "bundle.js" | resources.Minify }}
+
+<script type="text/javascript" src="{{ $bundle.RelPermalink }}"></script>
+
+<!-- Extended footer section-->
+{{ partial "extended_footer.html" . }}

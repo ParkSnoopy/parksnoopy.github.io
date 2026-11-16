@@ -103,6 +103,19 @@ test("do not convert API failures or malformed responses into missing releases",
 	);
 });
 
+test("report GitHub response failures in Korean", async () => {
+	for (const [result, message] of [
+		[new Response("", { status: 500 }), /불러오지 못했습니다 \(HTTP 500\)/],
+		[new Response("", { status: 429 }), /요청 한도/],
+		[response({}), /잘못된 릴리스 목록/],
+	]) {
+		await assert.rejects(
+			fetchReleases(repo, ["sample"], async () => result, "ko"),
+			message,
+		);
+	}
+});
+
 test("preserve package variants, compound extensions, sizes and platform groups", () => {
 	const asset = (name) => ({
 		name,

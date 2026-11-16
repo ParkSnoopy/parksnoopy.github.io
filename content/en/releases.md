@@ -4,6 +4,8 @@ title: "Releases"
 description: "Direct downloads of my apps, one build per platform."
 layout: "releases"
 repo: "ParkSnoopy/ParkSnoopy"
+enableJavaScript: "Enable JavaScript to load downloads, or"
+viewOnGitHub: "view releases on GitHub"
 projects:
 
 - name: "Snoo Box"
