@@ -1,7 +1,6 @@
 ---
 title: "Why I Built My Own File-Sharing Service"
 date: 2026-11-16
-draft: true
 description: "A personal file-sharing tool, several repositories, an unsuccessful advertising experiment, and a rewrite that made it useful every day."
 tags: ["file-sharing", "privacy", "personal-projects", "ai"]
 ---
