@@ -1,5 +1,5 @@
 baseURL = "https://parksnoopy.github.io/"
-defaultContentLanguage = "en"
+locale = "en-us"
 title = "ParkSnoopy"
 theme = "terminal"
 pagination.pagerSize = 5
@@ -13,18 +13,6 @@ pagination.pagerSize = 5
   showMenuItems = 4
   fullWidthTheme = false
   centerTheme = false
-  showLanguageSelector = true
-
-  [params.logo]
-    logoText = "ParkSnoopy"
-
-[languages.en]
-  locale = "en-US"
-  label = "English"
-  contentDir = "content/en"
-  weight = 1
-
-  [languages.en.params]
   subtitle = "Builder of small tools. Rust, Go, containers."
   readMore = "Read more"
   readOtherPosts = "Read other posts"
@@ -33,64 +21,29 @@ pagination.pagerSize = 5
   missingContentMessage = "Page not found..."
   missingBackButtonLabel = "Back to home page"
   menuMore = "Show more"
-  menuLabel = "Menu"
 
-  [[languages.en.menu.main]]
+  [params.logo]
+    logoText = "ParkSnoopy"
+    logoHomeLink = "/"
+
+[menu]
+  [[menu.main]]
     identifier = "portfolio"
     name = "Portfolio"
-    pageRef = "/portfolio"
+    url = "/portfolio/"
     weight = 1
-  [[languages.en.menu.main]]
+  [[menu.main]]
     identifier = "posts"
     name = "Posts"
-    pageRef = "/posts"
+    url = "/posts/"
     weight = 2
-  [[languages.en.menu.main]]
+  [[menu.main]]
     identifier = "tools"
     name = "Tools"
-    pageRef = "/tools"
+    url = "/tools/"
     weight = 3
-  [[languages.en.menu.main]]
+  [[menu.main]]
     identifier = "releases"
     name = "Releases"
-    pageRef = "/releases"
-    weight = 4
-
-[languages.ko]
-  locale = "ko-KR"
-  label = "한국어"
-  contentDir = "content/kr"
-  weight = 2
-  hasCJKLanguage = true
-
-  [languages.ko.params]
-  subtitle = "Rust, Go, 컨테이너로 작은 도구를 만듭니다."
-  readMore = "더 읽기"
-  readOtherPosts = "다른 글 읽기"
-  newerPosts = "최신 글"
-  olderPosts = "이전 글"
-  missingContentMessage = "페이지를 찾을 수 없습니다."
-  missingBackButtonLabel = "홈으로 돌아가기"
-  menuMore = "더 보기"
-  menuLabel = "메뉴"
-
-  [[languages.ko.menu.main]]
-    identifier = "portfolio"
-    name = "포트폴리오"
-    pageRef = "/portfolio"
-    weight = 1
-  [[languages.ko.menu.main]]
-    identifier = "posts"
-    name = "글"
-    pageRef = "/posts"
-    weight = 2
-  [[languages.ko.menu.main]]
-    identifier = "tools"
-    name = "도구"
-    pageRef = "/tools"
-    weight = 3
-  [[languages.ko.menu.main]]
-    identifier = "releases"
-    name = "다운로드"
-    pageRef = "/releases"
+    url = "/releases/"
     weight = 4

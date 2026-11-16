@@ -3,7 +3,7 @@
   <h1 class="post-title">{{ .Title }}</h1>
   <div class="post-content">
     {{ .Content }}
-    <div data-release-repo="{{ .Params.repo }}" data-language="{{ .Language.Lang }}" aria-busy="false">
+    <div data-release-repo="{{ .Params.repo }}" aria-busy="false">
       <p data-release-status role="status" hidden></p>
       {{ range .Params.projects }}
         <section class="release" data-project="{{ .slug }}">
@@ -14,8 +14,8 @@
       {{ end }}
     </div>
     <noscript>
-      <p>{{ .Params.enableJavaScript }}
-        <a href="https://github.com/{{ .Params.repo }}/releases">{{ .Params.viewOnGitHub }}</a>.</p>
+      <p>Enable JavaScript to load downloads, or
+        <a href="https://github.com/{{ .Params.repo }}/releases">view releases on GitHub</a>.</p>
     </noscript>
   </div>
 </article>

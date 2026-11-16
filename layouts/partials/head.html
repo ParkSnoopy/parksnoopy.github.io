@@ -10,9 +10,6 @@
   <meta name="robots" content="noodp" />
 {{ end }}
 <link rel="canonical" href="{{ .Permalink }}" />
-{{ range .AllTranslations }}
-<link rel="alternate" hreflang="{{ .Language.Locale }}" href="{{ .Permalink }}" />
-{{ end }}
 
 {{ template "_internal/google_analytics.html" . }}
 
